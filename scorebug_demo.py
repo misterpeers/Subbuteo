@@ -1,7 +1,7 @@
 import pygame
 
 from sim_pitch import FRAME_BORDER_MM, PITCH_LENGTH_MM, draw_pitch
-from sim_scorebug import draw_scorebug
+from sim_scorebug import draw_match_timer, draw_scorebug
 
 
 WINDOW_SIZE = (1280, 680)
@@ -16,8 +16,16 @@ def draw_demo(surface: pygame.Surface) -> None:
     scale = field.width / PITCH_LENGTH_MM
     frame_height = round(FRAME_BORDER_MM * scale)
     board_top = field.top - frame_height
-    scorebug_height = min(30, max(16, frame_height - 6))
+    scorebug_height = min(38, max(16, frame_height - 6))
     scorebug_top = board_top + (frame_height - scorebug_height) // 2
+    timer_left = field.left
+    draw_match_timer(
+        surface,
+        seconds_remaining=15 * 60,
+        left=timer_left,
+        top=scorebug_top,
+        height=scorebug_height,
+    )
     draw_scorebug(
         surface,
         home_name="Home United",

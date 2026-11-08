@@ -1,11 +1,13 @@
 ﻿import pygame
 
 from sim_pitch import (
+    FRAME_BORDER_MM,
     MARKING,
     PITCH_LENGTH_MM,
     SHOOTING_AREA_DEPTH_MM,
     draw_pitch,
 )
+from sim_scorebug import draw_match_timer, draw_scorebug
 
 PLAYER_PIECE_DIAMETER_MM = 21
 PLAYER_PIECE_INNER_DIAMETER_MM = 16
@@ -20,6 +22,11 @@ AWAY_TEAM = (218, 74, 62)
 AWAY_PIECE_BORDER = (20, 20, 20)
 PIECE_OUTLINE = (24, 35, 29)
 BALL_COLOR = (248, 248, 240)
+
+HOME_SCORE = 2
+AWAY_SCORE = 1
+HOME_NAME = "Home United"
+AWAY_NAME = "Away City"
 
 WINDOW_SIZE = (1280, 900)
 MIN_WINDOW_SIZE = (640, 480)
@@ -114,6 +121,34 @@ def draw_mode_hint(surface: pygame.Surface) -> None:
     )
 
 
+def draw_match_scorebug(surface: pygame.Surface, field: pygame.Rect) -> None:
+    scale = field.width / PITCH_LENGTH_MM
+    frame_height = round(FRAME_BORDER_MM * scale)
+    board_top = field.top - frame_height
+    scorebug_height = min(38, max(16, frame_height - 6))
+    scorebug_top = board_top + (frame_height - scorebug_height) // 2
+
+    draw_match_timer(
+        surface,
+        seconds_remaining=15 * 60,
+        left=field.left,
+        top=scorebug_top,
+        height=scorebug_height,
+    )
+    draw_scorebug(
+        surface,
+        home_name=HOME_NAME,
+        home_score=HOME_SCORE,
+        home_piece_color=HOME_TEAM,
+        away_score=AWAY_SCORE,
+        away_piece_color=AWAY_TEAM,
+        away_name=AWAY_NAME,
+        center_x=field.centerx,
+        top=scorebug_top,
+        height=scorebug_height,
+    )
+
+
 def main() -> None:
     pygame.init()
     screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
@@ -142,7 +177,8 @@ def main() -> None:
                 )
 
         if show_match_setup:
-            draw_match_setup(screen)
+            field = draw_match_setup(screen)
+            draw_match_scorebug(screen, field)
         else:
             draw_pitch(screen)
         draw_mode_hint(screen)
@@ -154,4 +190,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

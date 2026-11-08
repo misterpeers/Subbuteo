@@ -13,6 +13,15 @@ physics, and `sim_tactics.py` builds simulator tactics. Demos and previews use
 separate `<module>_demo.py` files and import the corresponding core module
 rather than duplicating its implementation.
 
+### UI and graphical typography
+
+Use the Barlow font family as the preferred typeface for user-interface and
+graphical text. Use Barlow Black for prominent score numerals and Barlow
+Condensed Medium for team labels where a clear typographic weight contrast is
+desired. Keep changing numeric values in fixed-width or tabular cells so their
+layout does not shift as digits change. Use the bundled font files and their
+license in `assets/fonts/` rather than relying on system-installed fonts.
+
 ## Match at a glance
 
 - **View:** 2D, top-down.
@@ -118,6 +127,36 @@ they are presentation guidance, not additional gameplay rules.
 - **Layering:** Draw the background, solid frame, alternating turf, and then
   pitch and goal markings, in that order. Do not add player pieces, a ball,
   logos, labels, or other decoration to the empty design preview.
+
+### Score bug rendering standard
+
+The score bug is a separate match UI element, not part of the empty pitch
+design preview. Use these visual requirements when displaying match
+information over the pitch:
+
+- **Placement:** Center the score bug horizontally over the pitch, in the
+  board's upper frame. Place a separate match-timer pill on the same row at
+  the upper left; align its left edge with the pitch's top-left corner.
+- **Score pill:** Use a compact white rounded pill with dark-green score
+  numerals. Center the complete score-and-separator group inside the pill.
+- **Team indicators:** Place each team's circular piece-color badge outside
+  the corresponding end of the score pill, with the team name farther
+  outward. Use each team's configured piece color for its badge.
+- **Timer pill:** Match the score pill's white fill, rounded shape, height,
+  and dark-green numerals. Show time as `MM:SS`; keep numeric cells
+  fixed-width/tabular so changing digits do not shift the layout. The design
+  preview may show a static `15:00`; in a match view, display the time from
+  match state.
+- **Typography:** Use Barlow Black for score and timer numerals and Barlow
+  Condensed Medium for team labels. Team labels should be prominent but
+  subordinate to the score numerals. Use the bundled fonts in `assets/fonts/`.
+- **Sizing:** Use a score-bug row height of up to 38 pixels, reduced as needed
+  to fit the board frame while preserving clear spacing and alignment.
+- **Integration:** Keep score-bug drawing in the reusable `sim_scorebug.py`
+  module, separate from match rules and state. The match view should render
+  the pitch first, then call this module with scores, team names and colors,
+  and remaining match time from match state. Keep `scorebug_demo.py` as a
+  standalone visual preview, not the match implementation.
 
 ### Match setup piece rendering standard
 
