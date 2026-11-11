@@ -1,3 +1,9 @@
+"""Pygame score bug and match timer rendering utilities.
+
+The score bug draws the live score, team names, and piece badges in a compact HUD
+layout suitable for overlaying on the pitch preview.
+"""
+
 from functools import lru_cache
 from pathlib import Path
 
@@ -24,15 +30,42 @@ TEAM_FONT_PATH = (
 
 @lru_cache(maxsize=16)
 def _score_font(size: int) -> pygame.font.Font:
+    """Load or reuse the score font for a given size.
+
+    Args:
+        size: The requested font size in pixels.
+
+    Returns:
+        pygame.font.Font: A cached font instance configured with the score font.
+    """
     return pygame.font.Font(str(SCORE_FONT_PATH), size)
 
 
 @lru_cache(maxsize=16)
 def _team_font(size: int) -> pygame.font.Font:
+    """Load or reuse the team-label font for a given size.
+
+    Args:
+        size: The requested font size in pixels.
+
+    Returns:
+        pygame.font.Font: A cached font instance configured with the team label
+        face.
+    """
     return pygame.font.Font(str(TEAM_FONT_PATH), size)
 
 
 def _render_tabular_text(font: pygame.font.Font, text: str) -> pygame.Surface:
+    """Render text using a monospaced digit layout to keep numeric columns aligned.
+
+    Args:
+        font: The font used to render the text.
+        text: The string to draw, typically a score or timer value.
+
+    Returns:
+        pygame.Surface: A surfaced text render sized so digits share a uniform
+        tabular width.
+    """
     digit_count = sum(character.isdigit() for character in text)
     cell_count = max(2, digit_count)
     cell_width = max(font.size(digit)[0] for digit in "0123456789")
@@ -63,10 +96,31 @@ def _render_tabular_text(font: pygame.font.Font, text: str) -> pygame.Surface:
 
 
 def _render_tabular_score(font: pygame.font.Font, score: int) -> pygame.Surface:
+    """Render a numeric score using the tabular text layout.
+
+    Args:
+        font: The font used for the score glyphs.
+        score: The integer score value to display.
+
+    Returns:
+        pygame.Surface: A rendered score surface with numerals aligned in a fixed
+        width style.
+    """
     return _render_tabular_text(font, str(score))
 
 
 def _fit_text(text: str, font: pygame.font.Font, max_width: int) -> str:
+    """Trim a team name to a maximum pixel width, appending an ellipsis when needed.
+
+    Args:
+        text: The original team label to fit.
+        font: The font used to measure the label width.
+        max_width: The largest allowed pixel width for the label.
+
+    Returns:
+        str: A shortened label that fits inside ``max_width`` while preserving the
+        most relevant text.
+    """
     if font.size(text)[0] <= max_width:
         return text
 
@@ -89,6 +143,24 @@ def draw_scorebug(
     top: int,
     height: int,
 ) -> pygame.Rect:
+    """Draw the match score bug and return the combined bounds of the HUD elements.
+
+    Args:
+        surface: The surface on which the score bug is rendered.
+        home_name: Display name for the home team.
+        home_score: Current home-team score value.
+        home_piece_color: RGB color used for the home team's badge.
+        away_score: Current away-team score value.
+        away_piece_color: RGB color used for the away team's badge.
+        away_name: Display name for the away team.
+        center_x: Horizontal center used to position the pill within the surface.
+        top: Top-most Y coordinate of the score bug.
+        height: Height budget available for the score bug.
+
+    Returns:
+        pygame.Rect: The union rectangle covering the score pill, badges, and team
+        labels. If the available space is too small, an empty rect is returned.
+    """
     max_width = max(0, surface.get_width() - 48)
     if max_width < 112 or height < 16:
         return pygame.Rect(center_x, top, 0, 0)
@@ -199,6 +271,19 @@ def draw_match_timer(
     top: int,
     height: int,
 ) -> pygame.Rect:
+    """Draw a padded countdown timer pill and return its rendered bounds.
+
+    Args:
+        surface: The surface on which the timer is drawn.
+        seconds_remaining: The remaining match time, expressed in seconds.
+        left: The horizontal pixel origin of the timer.
+        top: The vertical pixel origin of the timer.
+        height: The maximum height available for the timer pill.
+
+    Returns:
+        pygame.Rect: The bounding rectangle for the timer pill, or an empty rect
+        when the requested space is too small or the pill would exceed the surface.
+    """
     if height < 16:
         return pygame.Rect(left, top, 0, 0)
 

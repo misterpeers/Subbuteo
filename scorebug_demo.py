@@ -1,3 +1,9 @@
+"""Minimal score bug demo for the Subbuteo HUD overlay.
+
+This script renders the pitch with a compact timer and score panel so the visual
+behaviour of the scorebug widget can be previewed independently.
+"""
+
 import pygame
 
 from sim_pitch import FRAME_BORDER_MM, PITCH_LENGTH_MM, draw_pitch
@@ -12,6 +18,14 @@ AWAY_TEAM_COLOR = (218, 74, 62)
 
 
 def draw_demo(surface: pygame.Surface) -> None:
+    """Render a pitch preview with a sample score bug and match timer.
+
+    Args:
+        surface: The destination surface to paint the pitch and overlay widgets on.
+
+    Returns:
+        None. The demo board is drawn directly onto the provided surface.
+    """
     field = draw_pitch(surface)
     scale = field.width / PITCH_LENGTH_MM
     frame_height = round(FRAME_BORDER_MM * scale)
@@ -41,6 +55,14 @@ def draw_demo(surface: pygame.Surface) -> None:
 
 
 def main() -> None:
+    """Run the score bug preview loop until the user closes the window.
+
+    Args:
+        None.
+
+    Returns:
+        None. The event loop controls the lifetime of the Pygame window.
+    """
     pygame.init()
     screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
     pygame.display.set_caption("Subbuteo Score Bug Preview")

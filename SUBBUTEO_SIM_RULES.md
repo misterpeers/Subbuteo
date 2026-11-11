@@ -13,6 +13,12 @@ physics, and `sim_tactics.py` builds simulator tactics. Demos and previews use
 separate `<module>_demo.py` files and import the corresponding core module
 rather than duplicating its implementation.
 
+### Documentation standards
+
+All code files, functions, methods, and classes should include docstrings. Use
+multi-line docstrings that describe the purpose of the object and, where
+applicable, list arguments and return values or side effects clearly.
+
 ### UI and graphical typography
 
 Use the Barlow font family as the preferred typeface for user-interface and

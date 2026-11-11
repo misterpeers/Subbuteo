@@ -1,4 +1,10 @@
-﻿import pygame
+"""Pitch preview demo showing both the empty board and live match setup view.
+
+The module renders a full pitch layout, overlays a score bug, and lets the user
+switch between the stadium design preview and a mock match setup composition.
+"""
+
+import pygame
 
 from sim_pitch import (
     FRAME_BORDER_MM,
@@ -25,14 +31,23 @@ BALL_COLOR = (248, 248, 240)
 
 HOME_SCORE = 2
 AWAY_SCORE = 1
-HOME_NAME = "Home United"
-AWAY_NAME = "Away City"
+HOME_NAME = "Team A"
+AWAY_NAME = "Team B"
 
 WINDOW_SIZE = (1280, 900)
 MIN_WINDOW_SIZE = (640, 480)
 
 
 def draw_match_setup(surface: pygame.Surface) -> pygame.Rect:
+    """Draw the match setup view and return the field bounds for the pitch.
+
+    Args:
+        surface: The Pygame surface that receives the rendered pitch and pieces.
+
+    Returns:
+        pygame.Rect: The rectangle describing the playing field location inside the
+        current surface after scaling for the window size.
+    """
     field = draw_pitch(surface)
     scale = field.width / PITCH_LENGTH_MM
     piece_outer_radius = max(1, round(PLAYER_PIECE_DIAMETER_MM * scale / 2))
@@ -40,6 +55,15 @@ def draw_match_setup(surface: pygame.Surface) -> pygame.Rect:
     border_width = max(1, round(PIECE_BORDER_MM * scale))
 
     def pitch_point(x: float, y: float) -> tuple[int, int]:
+        """Convert normalized field coordinates to pixel coordinates.
+
+        Args:
+            x: Horizontal pitch position normalized from 0.0 to 1.0.
+            y: Vertical pitch position normalized from 0.0 to 1.0.
+
+        Returns:
+            tuple[int, int]: The pixel coordinate pair in the surface space.
+        """
         return (
             field.left + round(x * field.width),
             field.top + round(y * field.height),
@@ -50,6 +74,16 @@ def draw_match_setup(surface: pygame.Surface) -> pygame.Rect:
         fill_color: tuple[int, int, int],
         border_color: tuple[int, int, int],
     ) -> None:
+        """Render one player piece on the pitch.
+
+        Args:
+            position: Normalized ``(x, y)`` position on the field.
+            fill_color: RGB color used for the central body of the piece.
+            border_color: RGB color used for the outer ring.
+
+        Returns:
+            None. The figure is drawn directly onto the provided surface.
+        """
         center = pitch_point(*position)
         pygame.draw.circle(
             surface,
@@ -64,6 +98,16 @@ def draw_match_setup(surface: pygame.Surface) -> pygame.Rect:
         fill_color: tuple[int, int, int],
         border_color: tuple[int, int, int],
     ) -> None:
+        """Render a goalkeeper-shaped rod piece at the goal line.
+
+        Args:
+            x: Normalized horizontal position along the pitch.
+            fill_color: RGB color used for the keeper body.
+            border_color: RGB color used for the keeper outline.
+
+        Returns:
+            None. The goalkeeper is drawn to the target surface in place.
+        """
         center = pitch_point(x, 0.5)
         thickness = max(1, round(GOALKEEPER_THICKNESS_MM * scale))
         width = max(1, round(GOALKEEPER_WIDTH_MM * scale))
@@ -113,6 +157,14 @@ def draw_match_setup(surface: pygame.Surface) -> pygame.Rect:
 
 
 def draw_mode_hint(surface: pygame.Surface) -> None:
+    """Render a small hint telling the user how to switch views.
+
+    Args:
+        surface: The surface on which the hint should be drawn.
+
+    Returns:
+        None. The preview text is painted directly to the given surface.
+    """
     hint_font = pygame.font.Font(None, 18)
     hint = hint_font.render("Press M to switch between views", True, MARKING)
     surface.blit(
@@ -122,6 +174,16 @@ def draw_mode_hint(surface: pygame.Surface) -> None:
 
 
 def draw_match_scorebug(surface: pygame.Surface, field: pygame.Rect) -> None:
+    """Overlay the match timer and score bug on the active pitch view.
+
+    Args:
+        surface: The window surface to update.
+        field: The pitch field rectangle used to place the score bug relative to the
+            board.
+
+    Returns:
+        None. The timer and score elements are drawn directly onto the surface.
+    """
     scale = field.width / PITCH_LENGTH_MM
     frame_height = round(FRAME_BORDER_MM * scale)
     board_top = field.top - frame_height
@@ -150,6 +212,14 @@ def draw_match_scorebug(surface: pygame.Surface, field: pygame.Rect) -> None:
 
 
 def main() -> None:
+    """Run the pitch preview demo loop and handle user interaction.
+
+    Args:
+        None.
+
+    Returns:
+        None. The function manages the Pygame event loop until the window closes.
+    """
     pygame.init()
     screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
     pygame.display.set_caption("Subbuteo Pitch - Design Preview")

@@ -1,3 +1,9 @@
+"""Rendering helpers for the Subbuteo pitch design preview.
+
+This module defines the board geometry, turf pattern, and pitch markings used by
+both the standalone pitch preview and match setup displays.
+"""
+
 import pygame
 
 
@@ -29,6 +35,20 @@ def _dashed_line(
     gap_length: int,
     width: int,
 ) -> None:
+    """Draw a dashed line segment between two points.
+
+    Args:
+        surface: The surface to draw on.
+        color: RGB tuple used for the dash stroke color.
+        start: The starting pixel coordinate of the line as ``(x, y)``.
+        end: The ending pixel coordinate of the line as ``(x, y)``.
+        dash_length: The visible length of each dash in pixels.
+        gap_length: The gap between consecutive dashes in pixels.
+        width: The stroke thickness in pixels.
+
+    Returns:
+        None. The dashed line is rendered directly to the supplied surface.
+    """
     start_vector = pygame.Vector2(start)
     end_vector = pygame.Vector2(end)
     segment = end_vector - start_vector
@@ -51,6 +71,15 @@ def _dashed_line(
 
 
 def draw_pitch(surface: pygame.Surface) -> pygame.Rect:
+    """Render the empty Subbuteo pitch and return its field rectangle.
+
+    Args:
+        surface: The destination surface used for the pitch preview.
+
+    Returns:
+        pygame.Rect: The rectangle describing the playable field area within the
+        surface, after scaling to fit the current window size.
+    """
     surface.fill(BACKGROUND)
     surface_width, surface_height = surface.get_size()
     scale = min(
