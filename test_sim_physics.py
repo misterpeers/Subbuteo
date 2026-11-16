@@ -43,8 +43,10 @@ class PhysicsWorldTests(unittest.TestCase):
         self.assertAlmostEqual(world.ball.velocity.y, 65.0)
         self.assertEqual(world.possession, HOME)
 
-    def test_ineligible_goal_mouth_attempt_rebounds_and_transfers_possession(self) -> None:
-        """An out-of-area attempt through the goal mouth rebounds."""
+    def test_ineligible_goal_mouth_attempt_stops_in_net_and_transfers_possession(
+        self,
+    ) -> None:
+        """An out-of-area attempt enters the net without scoring or rebounding."""
         world = _empty_world(Vector2(1.0 - 0.5 / PITCH_LENGTH_MM, 0.5))
         world.ball.velocity = Vector2(500.0, 0.0)
         world.last_flick_team = HOME
@@ -54,7 +56,15 @@ class PhysicsWorldTests(unittest.TestCase):
 
         self.assertEqual(world.away_score, 0)
         self.assertEqual(world.possession, AWAY)
-        self.assertLess(world.ball.velocity.x, 0.0)
+        self.assertEqual(world.ball_in_net, AWAY)
+        self.assertEqual(world.ball.velocity, Vector2(0.0, 0.0))
+        self.assertGreater(world.ball.position.x, 1.0)
+
+        ball_position = world.ball.position
+        world.step(1.0)
+
+        self.assertEqual(world.ball.position, ball_position)
+        self.assertEqual(world.away_score, 0)
 
     def test_ball_on_shooting_line_is_not_goal_eligible(self) -> None:
         """A ball starting exactly on the shooting line cannot score."""
@@ -67,6 +77,8 @@ class PhysicsWorldTests(unittest.TestCase):
 
         self.assertEqual(world.away_score, 0)
         self.assertEqual(world.possession, AWAY)
+        self.assertEqual(world.ball_in_net, AWAY)
+        self.assertEqual(world.ball.velocity, Vector2(0.0, 0.0))
 
     def test_goal_line_outside_goal_mouth_rebounds_with_possession_transfer(
         self,
@@ -156,6 +168,7 @@ class PhysicsWorldTests(unittest.TestCase):
         world.step(1.0 / 120.0)
 
         self.assertGreater(world.ball.velocity.x, 0.0)
+        self.assertIn("home-0", world.last_ball_contacts)
 
     def test_maximum_strength_piece_flick_travels_about_half_pitch(self) -> None:
         """A freely moving player piece should stop after about 600 mm."""

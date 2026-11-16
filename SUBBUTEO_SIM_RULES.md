@@ -260,6 +260,10 @@ placements still need to be defined by the project.
 ### Attacking flicks
 
 - A figure may make up to **three consecutive flicks/touches** of the ball.
+- The attacking player may switch to another player piece at any time and does
+  not need to use all three flicks with one piece. A different player piece
+  may take the next flick if it can legally contact the ball, including from
+  a diagonal approach.
 - After the third consecutive flick, the ball must touch another friendly
   figure, an opposing figure, or the opposing goalkeeper to reset that
   figure's touch counter. A fourth consecutive flick is not allowed.
@@ -342,8 +346,10 @@ Apply these priorities in order; a higher priority overrides a lower one.
    millimeters) and there is a clear vector to the goal mouth, shoot.
 2. **Keep possession and avoid fouls:** Contact the ball before any defender.
    If a direct path risks illegal contact, choose a bank shot or another
-   figure. Respect the consecutive-touch limit and advance the ball by passing
-   or shooting when required.
+   figure. The attacking player may choose any available player piece for a
+   flick; it need not use all three touches with the current piece. Respect the
+   consecutive-touch limit and advance the ball by passing or shooting when
+   required.
 3. **Advance:** When the higher priorities permit, move the ball forward
    (`X` increasing toward the opponent's goal) or position a receiver in a
    useful forward zone.

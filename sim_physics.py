@@ -117,6 +117,7 @@ class PhysicsWorld:
         self.last_goal: GoalEvent | None = None
         self.ball_in_net: str | None = None
         self.last_flick_team: str | None = None
+        self.last_ball_contacts: set[str] = set()
         self._shot_start_x: float | None = None
 
     @classmethod
@@ -228,6 +229,7 @@ class PhysicsWorld:
                 do not advance the world.
         """
         self.last_goal = None
+        self.last_ball_contacts.clear()
         if elapsed_seconds <= 0:
             return
 
@@ -272,6 +274,10 @@ class PhysicsWorld:
         for index, first in enumerate(self.pieces):
             for second in self.pieces[index + 1 :]:
                 self._resolve_collision(first, second)
+            if (
+                first.position_mm - self.ball.position_mm
+            ).length < first.radius_mm + self.ball.radius_mm:
+                self.last_ball_contacts.add(first.body_id)
             self._resolve_collision(first, self.ball)
 
         for piece in self.pieces:
@@ -417,7 +423,7 @@ class PhysicsWorld:
                 self._transfer_possession()
 
     def _handle_goal_line(self, goal_side: str) -> None:
-        """Score a valid goal or rebound an ineligible goal-mouth attempt."""
+        """Score an eligible shot or stop an ineligible attempt in the net."""
         target_team = HOME if goal_side == "home" else AWAY
         own_goal = self.last_flick_team == target_team
         shot_start_x = self._shot_start_x
@@ -444,10 +450,8 @@ class PhysicsWorld:
             self.last_goal = GoalEvent(scoring_team, goal_side)
             self.ball_in_net = goal_side
         else:
-            radius_x = self.ball.radius_mm / PITCH_LENGTH_MM
-            x = radius_x if goal_side == "home" else 1.0 - radius_x
-            self.ball.position = Vector2(x, self.ball.position.y)
-            self._reflect_velocity(self.ball, "x", WALL_RESTITUTION)
+            self.ball_in_net = goal_side
+            self.ball.velocity = Vector2(0.0, 0.0)
             self._transfer_possession()
 
     def _resolve_net_boundaries(self) -> None:
