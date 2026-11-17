@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from heapq import heappop, heappush
 from itertools import count
-from math import ceil, hypot, sqrt
+from math import ceil, cos, hypot, pi, sin, sqrt
 from typing import Literal
 
 from sim_ai_flick import distance_between_mm
@@ -24,6 +24,8 @@ from sim_physics import (
 
 TRAINING_FLICK_SAFETY_FACTOR = 0.88
 TRAINING_BALL_ADVANCE_MM = 30.0
+TRAINING_SETUP_OFFSETS_MM = (15.0, 30.0)
+TRAINING_SETUP_DIRECTIONS = 12
 
 
 @dataclass(frozen=True)
@@ -359,6 +361,8 @@ def _training_ball_pass_plan(
     obstacles: list[Obstacle],
 ) -> TrainingBallFlickPlan | None:
     """Choose a reachable teammate and flick the ball through their position."""
+    best_plan: TrainingBallFlickPlan | None = None
+    best_score: tuple[float, float] | None = None
     for receiver_id, receiver_position in sorted(
         teammates,
         key=lambda teammate: distance_between_mm(ball_position, teammate[1]),
@@ -383,28 +387,86 @@ def _training_ball_pass_plan(
             obstacles,
             action="pass",
         )
-        if plan is not None:
-            return TrainingBallFlickPlan(
-                piece_target=plan.piece_target,
-                ball_target=plan.ball_target,
-                strength=plan.strength,
-                action="pass",
-                receiver_piece_id=receiver_id,
+        if plan is None:
+            continue
+        score = (
+            plan.strength,
+            distance_between_mm(ball_position, ball_target),
+        )
+        if best_score is not None and score >= best_score:
+            continue
+        best_score = score
+        best_plan = TrainingBallFlickPlan(
+            piece_target=plan.piece_target,
+            ball_target=plan.ball_target,
+            strength=plan.strength,
+            action="pass",
+            receiver_piece_id=receiver_id,
+        )
+
+    return best_plan
+
+
+def _training_ball_advance_waypoints(
+    ball_position: Vector2,
+    obstacles: list[Obstacle],
+) -> list[Vector2]:
+    progress_areas = (
+        TargetArea(Vector2(0.92, 0.5), 0.015),
+        TargetArea(Vector2(0.97, 0.44), 0.012),
+        TargetArea(Vector2(0.97, 0.56), 0.012),
+        TargetArea(Vector2(0.90, 0.36), 0.02),
+        TargetArea(Vector2(0.90, 0.64), 0.02),
+    )
+    waypoints: list[Vector2] = []
+    clearance = max(
+        PIECE_RADIUS_MM / PITCH_LENGTH_MM,
+        BALL_RADIUS_MM / PITCH_WIDTH_MM,
+    )
+    for progress_area in progress_areas:
+        if progress_area.contains(ball_position):
+            continue
+        target = progress_area.center
+        travel_mm = distance_between_mm(ball_position, target)
+        fraction = min(1.0, TRAINING_BALL_ADVANCE_MM / travel_mm)
+        waypoint = Vector2(
+            ball_position.x + (target.x - ball_position.x) * fraction,
+            ball_position.y + (target.y - ball_position.y) * fraction,
+        )
+        if not _segment_is_clear(
+            ball_position,
+            waypoint,
+            obstacles,
+            clearance,
+        ):
+            waypoint = choose_training_waypoint(
+                ball_position,
+                progress_area,
+                obstacles,
             )
-    return None
+            if waypoint is None:
+                continue
+            travel_mm = distance_between_mm(ball_position, waypoint)
+            if travel_mm > TRAINING_BALL_ADVANCE_MM:
+                fraction = TRAINING_BALL_ADVANCE_MM / travel_mm
+                waypoint = Vector2(
+                    ball_position.x + (waypoint.x - ball_position.x) * fraction,
+                    ball_position.y + (waypoint.y - ball_position.y) * fraction,
+                )
+        waypoints.append(waypoint)
+    return waypoints
 
 
-def plan_training_ball_flick(
+def _plan_training_ball_flick(
     piece_position: Vector2,
     ball_position: Vector2,
-    obstacles: list[Obstacle] | None = None,
+    obstacles: list[Obstacle],
     *,
-    piece_touches_used: int = 0,
-    teammates: list[tuple[str, Vector2]] | None = None,
+    piece_touches_used: int,
+    teammates: list[tuple[str, Vector2]],
+    advance_waypoints: list[Vector2] | None,
 ) -> TrainingBallFlickPlan | None:
-    """Plan a controlled advance, shot, or possession-preserving pass."""
-    obstacles = obstacles or []
-    teammates = teammates or []
+    """Plan one piece's shot, short advance, or possession-preserving pass."""
     if piece_touches_used >= 3:
         return None
 
@@ -429,44 +491,275 @@ def plan_training_ball_flick(
             obstacles,
         )
 
-    progress_areas = (
-        TargetArea(Vector2(0.92, 0.5), 0.015),
-        TargetArea(Vector2(0.97, 0.44), 0.012),
-        TargetArea(Vector2(0.97, 0.56), 0.012),
-        TargetArea(Vector2(0.90, 0.36), 0.02),
-        TargetArea(Vector2(0.90, 0.64), 0.02),
-    )
-    for progress_area in progress_areas:
-        if progress_area.contains(ball_position):
-            continue
-        waypoint = choose_training_waypoint(
+    if advance_waypoints is None:
+        advance_waypoints = _training_ball_advance_waypoints(
             ball_position,
-            progress_area,
             obstacles,
         )
-        if waypoint is None:
-            continue
-        travel_mm = distance_between_mm(ball_position, waypoint)
-        if travel_mm > TRAINING_BALL_ADVANCE_MM:
-            fraction = TRAINING_BALL_ADVANCE_MM / travel_mm
-            waypoint = Vector2(
-                ball_position.x + (waypoint.x - ball_position.x) * fraction,
-                ball_position.y + (waypoint.y - ball_position.y) * fraction,
-            )
+    advance_plans: list[TrainingBallFlickPlan] = []
+    for waypoint in advance_waypoints:
         plan = _training_ball_contact_plan(
             piece_position,
             ball_position,
             waypoint,
             obstacles,
         )
-        if plan is not None:
-            return plan
+        if plan is not None and plan.ball_target.x >= ball_position.x:
+            advance_plans.append(plan)
+    if advance_plans:
+        return min(
+            advance_plans,
+            key=lambda plan: (
+                plan.strength,
+                distance_between_mm(ball_position, plan.ball_target),
+            ),
+        )
     return _training_ball_pass_plan(
         piece_position,
         ball_position,
         teammates,
         obstacles,
     )
+
+
+def plan_training_ball_flick(
+    piece_position: Vector2,
+    ball_position: Vector2,
+    obstacles: list[Obstacle] | None = None,
+    *,
+    piece_touches_used: int = 0,
+    teammates: list[tuple[str, Vector2]] | None = None,
+) -> TrainingBallFlickPlan | None:
+    """Plan a controlled advance, shot, or possession-preserving pass."""
+    return _plan_training_ball_flick(
+        piece_position,
+        ball_position,
+        obstacles or [],
+        piece_touches_used=piece_touches_used,
+        teammates=teammates or [],
+        advance_waypoints=None,
+    )
+
+
+def _approach_intersects_teammate(
+    piece_position: Vector2,
+    piece_target: Vector2,
+    teammate_position: Vector2,
+) -> bool:
+    """Return whether a flicking piece's approach intersects a teammate base."""
+    approach_mm = Vector2(
+        (piece_target.x - piece_position.x) * PITCH_LENGTH_MM,
+        (piece_target.y - piece_position.y) * PITCH_WIDTH_MM,
+    )
+    approach_length_squared = approach_mm.dot(approach_mm)
+    if approach_length_squared == 0.0:
+        closest_point = piece_position
+    else:
+        teammate_offset_mm = Vector2(
+            (teammate_position.x - piece_position.x) * PITCH_LENGTH_MM,
+            (teammate_position.y - piece_position.y) * PITCH_WIDTH_MM,
+        )
+        approach_fraction = max(
+            0.0,
+            min(
+                1.0,
+                teammate_offset_mm.dot(approach_mm) / approach_length_squared,
+            ),
+        )
+        closest_point = Vector2(
+            piece_position.x
+            + (piece_target.x - piece_position.x) * approach_fraction,
+            piece_position.y
+            + (piece_target.y - piece_position.y) * approach_fraction,
+        )
+
+    return (
+        distance_between_mm(closest_point, teammate_position)
+        <= PIECE_RADIUS_MM * 2.0
+    )
+
+
+def _training_ball_followup_plan(
+    piece_position: Vector2,
+    ball_position: Vector2,
+    piece_touches_used: int,
+    teammates: list[tuple[str, Vector2]],
+    obstacles: list[Obstacle],
+) -> TrainingBallFlickPlan | None:
+    """Find a short, direct follow-up flick for a setup-pass receiver."""
+    if piece_touches_used >= 3:
+        return None
+
+    shooting_line = 1.0 - SHOOTING_AREA_DEPTH_MM / PITCH_LENGTH_MM
+    if ball_position.x > shooting_line:
+        shot = _training_ball_contact_plan(
+            piece_position,
+            ball_position,
+            Vector2(1.02, 0.5),
+            obstacles,
+            action="shot",
+        )
+        if shot is not None:
+            return shot
+
+    if piece_touches_used >= 2:
+        return _training_ball_pass_plan(
+            piece_position,
+            ball_position,
+            teammates,
+            obstacles,
+        )
+
+    advance_plans: list[TrainingBallFlickPlan] = []
+    for angle in (-pi / 6.0, 0.0, pi / 6.0):
+        ball_target = Vector2(
+            ball_position.x
+            + cos(angle) * TRAINING_BALL_ADVANCE_MM / PITCH_LENGTH_MM,
+            ball_position.y
+            + sin(angle) * TRAINING_BALL_ADVANCE_MM / PITCH_WIDTH_MM,
+        )
+        if not (
+            BALL_RADIUS_MM / PITCH_LENGTH_MM
+            <= ball_target.x
+            <= 1.0 - BALL_RADIUS_MM / PITCH_LENGTH_MM
+            and BALL_RADIUS_MM / PITCH_WIDTH_MM
+            <= ball_target.y
+            <= 1.0 - BALL_RADIUS_MM / PITCH_WIDTH_MM
+        ):
+            continue
+        plan = _training_ball_contact_plan(
+            piece_position,
+            ball_position,
+            ball_target,
+            obstacles,
+            action="advance",
+        )
+        if plan is not None:
+            advance_plans.append(plan)
+
+    if advance_plans:
+        return min(
+            advance_plans,
+            key=lambda plan: (
+                plan.strength,
+                distance_between_mm(ball_position, plan.ball_target),
+            ),
+        )
+    return _training_ball_pass_plan(
+        piece_position,
+        ball_position,
+        teammates,
+        obstacles,
+    )
+
+
+def _training_ball_setup_plan(
+    player_pieces: list[tuple[str, Vector2, int]],
+    flicking_piece_id: str,
+    ball_position: Vector2,
+    obstacles: list[Obstacle],
+) -> TrainingBallFlickPlan | None:
+    """Find a short third-touch nudge that opens a teammate's next route."""
+    flicking_piece_position = next(
+        position
+        for piece_id, position, _ in player_pieces
+        if piece_id == flicking_piece_id
+    )
+    teammates = [
+        (piece_id, position, touches_used)
+        for piece_id, position, touches_used in player_pieces
+        if piece_id != flicking_piece_id and touches_used < 3
+    ]
+    other_piece_positions = [
+        (piece_id, position)
+        for piece_id, position, _ in player_pieces
+        if piece_id != flicking_piece_id
+    ]
+    ball_margin_x = BALL_RADIUS_MM / PITCH_LENGTH_MM
+    ball_margin_y = BALL_RADIUS_MM / PITCH_WIDTH_MM
+    best_plan: TrainingBallFlickPlan | None = None
+    best_score: tuple[int, float, float, float] | None = None
+    next_action_priority = {"shot": 0, "pass": 1, "advance": 1}
+
+    for receiver_id, receiver_position, receiver_touches in teammates:
+        receiver_teammates = [
+            (piece_id, position)
+            for piece_id, position, _ in player_pieces
+            if piece_id != receiver_id
+        ]
+        for offset_mm in TRAINING_SETUP_OFFSETS_MM:
+            for direction_index in range(TRAINING_SETUP_DIRECTIONS):
+                angle = 2.0 * pi * direction_index / TRAINING_SETUP_DIRECTIONS
+                ball_target = Vector2(
+                    ball_position.x
+                    + cos(angle) * offset_mm / PITCH_LENGTH_MM,
+                    ball_position.y
+                    + sin(angle) * offset_mm / PITCH_WIDTH_MM,
+                )
+                if not (
+                    ball_margin_x <= ball_target.x <= 1.0 - ball_margin_x
+                    and ball_margin_y <= ball_target.y <= 1.0 - ball_margin_y
+                ):
+                    continue
+
+                setup_plan = _training_ball_contact_plan(
+                    flicking_piece_position,
+                    ball_position,
+                    ball_target,
+                    obstacles,
+                    action="pass",
+                )
+                if setup_plan is None or any(
+                    _approach_intersects_teammate(
+                        flicking_piece_position,
+                        setup_plan.piece_target,
+                        teammate_position,
+                    )
+                    for _, teammate_position in other_piece_positions
+                ):
+                    continue
+
+                next_plan = _training_ball_followup_plan(
+                    receiver_position,
+                    ball_target,
+                    receiver_touches,
+                    receiver_teammates,
+                    obstacles,
+                )
+                if next_plan is None:
+                    continue
+                if any(
+                    _approach_intersects_teammate(
+                        receiver_position,
+                        next_plan.piece_target,
+                        teammate_position,
+                    )
+                    for _, teammate_position in receiver_teammates
+                ) or _approach_intersects_teammate(
+                    receiver_position,
+                    next_plan.piece_target,
+                    setup_plan.piece_target,
+                ):
+                    continue
+
+                score = (
+                    next_action_priority[next_plan.action],
+                    offset_mm,
+                    setup_plan.strength,
+                    next_plan.strength,
+                )
+                if best_score is not None and score >= best_score:
+                    continue
+                best_score = score
+                best_plan = TrainingBallFlickPlan(
+                    piece_target=setup_plan.piece_target,
+                    ball_target=setup_plan.ball_target,
+                    strength=setup_plan.strength,
+                    action="pass",
+                    receiver_piece_id=receiver_id,
+                )
+
+    return best_plan
 
 
 def plan_training_team_ball_flick(
@@ -477,20 +770,41 @@ def plan_training_team_ball_flick(
     """Choose the safest available piece for the next ball-contact flick."""
     obstacles = obstacles or []
     candidate_plans: list[TrainingBallFlickPlan] = []
+    shooting_line = 1.0 - SHOOTING_AREA_DEPTH_MM / PITCH_LENGTH_MM
+    has_advancing_piece = any(
+        touches_used < 2 for _, _, touches_used in player_pieces
+    )
+    advance_waypoints = None
+    if ball_position.x <= shooting_line and has_advancing_piece:
+        advance_waypoints = _training_ball_advance_waypoints(
+            ball_position,
+            obstacles,
+        )
     for piece_id, piece_position, touches_used in player_pieces:
         teammates = [
             (teammate_id, teammate_position)
             for teammate_id, teammate_position, _ in player_pieces
             if teammate_id != piece_id
         ]
-        plan = plan_training_ball_flick(
+        plan = _plan_training_ball_flick(
             piece_position,
             ball_position,
             obstacles,
             piece_touches_used=touches_used,
             teammates=teammates,
+            advance_waypoints=advance_waypoints,
         )
         if plan is not None:
+            if any(
+                _approach_intersects_teammate(
+                    piece_position,
+                    plan.piece_target,
+                    teammate_position,
+                )
+                for teammate_id, teammate_position, _ in player_pieces
+                if teammate_id != piece_id
+            ):
+                continue
             candidate_plans.append(
                 TrainingBallFlickPlan(
                     piece_target=plan.piece_target,
@@ -502,17 +816,48 @@ def plan_training_team_ball_flick(
                 )
             )
 
+    if not any(plan.action == "shot" for plan in candidate_plans):
+        for piece_id, _, touches_used in player_pieces:
+            if touches_used != 2:
+                continue
+            setup_plan = _training_ball_setup_plan(
+                player_pieces,
+                piece_id,
+                ball_position,
+                obstacles,
+            )
+            if setup_plan is not None:
+                candidate_plans.append(
+                    TrainingBallFlickPlan(
+                        piece_target=setup_plan.piece_target,
+                        ball_target=setup_plan.ball_target,
+                        strength=setup_plan.strength,
+                        action=setup_plan.action,
+                        receiver_piece_id=setup_plan.receiver_piece_id,
+                        flicking_piece_id=piece_id,
+                    )
+                )
+
     shot_plans = [
         plan for plan in candidate_plans if plan.action == "shot"
     ]
     if shot_plans:
         return min(shot_plans, key=lambda plan: plan.strength)
 
-    advance_plans = [
-        plan for plan in candidate_plans if plan.action == "advance"
+    possession_plans = [
+        plan
+        for plan in candidate_plans
+        if plan.action in {"advance", "pass"}
     ]
-    if advance_plans:
-        return min(advance_plans, key=lambda plan: plan.strength)
+    if possession_plans:
+        return min(
+            possession_plans,
+            key=lambda plan: (
+                plan.strength,
+                distance_between_mm(ball_position, plan.ball_target),
+                -plan.ball_target.x,
+            ),
+        )
     if candidate_plans:
         return min(candidate_plans, key=lambda plan: plan.strength)
     return None

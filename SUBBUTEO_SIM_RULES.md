@@ -264,11 +264,20 @@ placements still need to be defined by the project.
   not need to use all three flicks with one piece. A different player piece
   may take the next flick if it can legally contact the ball, including from
   a diagonal approach.
+- Prefer short, controlled flicks and nearby passes that keep the ball within
+  safe reach of a friendly player piece. Among safe continuations, prefer the
+  lower required flick strength, then the shorter ball movement. A longer or
+  stronger flick remains valid when it is the safest way to continue
+  possession; do not use power merely to maximize distance.
 - After the third consecutive flick, the ball must touch another friendly
   figure, an opposing figure, or the opposing goalkeeper to reset that
   figure's touch counter. A fourth consecutive flick is not allowed.
-- The AI guidance further says that after two touches, the next move should
-  be a pass, a shot, or a soft touch against an opposing figure.
+- After two touches, the next move should be a shot, a pass, or a soft touch
+  against an opposing figure. The third touch may also be a short setup pass
+  when it offers a safer, lower-power continuation than a direct pass, leaving
+  another available player piece with a clear, safe next contact. The attacking
+  player can switch to that piece; the setup does not reset the current piece's
+  counter unless the ball touches another figure.
 - An attacking flick that misses the ball, hits a stationary defender or
   goalkeeper, or commits a foul changes possession.
 
@@ -347,9 +356,13 @@ Apply these priorities in order; a higher priority overrides a lower one.
 2. **Keep possession and avoid fouls:** Contact the ball before any defender.
    If a direct path risks illegal contact, choose a bank shot or another
    figure. The attacking player may choose any available player piece for a
-   flick; it need not use all three touches with the current piece. Respect the
-   consecutive-touch limit and advance the ball by passing or shooting when
-   required.
+   flick; it need not use all three touches with the current piece. Prefer a
+   controlled move that keeps the ball close to a teammate, selecting the
+   lower required flick strength and then the least ball travel among safe
+   options. A longer or stronger flick is appropriate when it is the safest
+   way to continue possession; do not maximize distance for its own sake.
+   After two touches, shoot, make a direct or setup pass with a clear next
+   contact for a teammate, or softly contact an opposing figure.
 3. **Advance:** When the higher priorities permit, move the ball forward
    (`X` increasing toward the opponent's goal) or position a receiver in a
    useful forward zone.

@@ -2,11 +2,20 @@
 
 import unittest
 
+from demo_ai_flick import (
+    DEFAULT_BALL_TRAINING_PIECE_POSITION,
+    DEFAULT_TEAMMATE_POSITION,
+    DEFAULT_THIRD_PIECE_POSITION,
+    _create_training_world,
+    _create_world,
+    _training_player_pieces,
+)
 from sim_ai_flick import (
     aim_target_position,
     distance_between_mm,
     flick_toward_target,
 )
+from sim_pitch import PENALTY_AREA_WIDTH_MM
 from sim_physics import (
     HOME,
     MAX_FLICK_SPEED_MM_S,
@@ -42,6 +51,37 @@ def _world(piece_position: Vector2) -> PhysicsWorld:
 
 class AIFlickTests(unittest.TestCase):
     """Check that the AI helper aims and scales its impulses correctly."""
+
+    def test_three_pieces_are_limited_to_ball_possession_training(self) -> None:
+        """Only ball-enabled training creates the two extra player pieces."""
+        free_play = _create_world()
+        target_training = _create_training_world()
+        ball_training = _create_training_world(include_ball=True)
+
+        self.assertEqual(len(free_play.pieces), 1)
+        self.assertEqual(len(_training_player_pieces(target_training)), 1)
+        ball_player_pieces = _training_player_pieces(ball_training)
+        self.assertEqual(len(ball_player_pieces), 3)
+        expected_positions = [
+            DEFAULT_BALL_TRAINING_PIECE_POSITION,
+            DEFAULT_TEAMMATE_POSITION,
+            DEFAULT_THIRD_PIECE_POSITION,
+        ]
+        self.assertEqual(
+            [piece.position for piece in ball_player_pieces],
+            expected_positions,
+        )
+        expected_edge_y = (
+            PITCH_WIDTH_MM - PENALTY_AREA_WIDTH_MM
+        ) / (2 * PITCH_WIDTH_MM)
+        self.assertAlmostEqual(
+            DEFAULT_TEAMMATE_POSITION.y,
+            expected_edge_y,
+        )
+        self.assertAlmostEqual(
+            DEFAULT_THIRD_PIECE_POSITION.y,
+            1.0 - expected_edge_y,
+        )
 
     def test_flick_points_toward_target_with_selected_strength(self) -> None:
         """A half-strength flick aims at the marker with half maximum speed."""

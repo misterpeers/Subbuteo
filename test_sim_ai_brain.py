@@ -14,6 +14,7 @@ from sim_ai_brain import (
 )
 from sim_ai_flick import distance_between_mm, flick_toward_target
 from sim_physics import (
+    BALL_FRICTION_MM_S2,
     BALL_RADIUS_MM,
     HOME,
     MAX_FLICK_SPEED_MM_S,
@@ -300,6 +301,33 @@ class TrainingBrainTests(unittest.TestCase):
         self.assertIsNotNone(plan)
         self.assertEqual(plan.flicking_piece_id, "ai-piece-2")
 
+    def test_team_planner_rejects_an_approach_through_a_teammate(self) -> None:
+        """A blocked candidate is skipped in favor of a clear teammate route."""
+        plan = plan_training_team_ball_flick(
+            [
+                ("ai-piece", Vector2(0.5, 0.5), 0),
+                ("ai-piece-2", Vector2(0.56, 0.5), 3),
+                ("ai-piece-3", Vector2(0.52, 0.7), 0),
+            ],
+            Vector2(0.65, 0.5),
+        )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.flicking_piece_id, "ai-piece-3")
+
+    def test_team_planner_allows_a_near_miss_of_a_teammate(self) -> None:
+        """A nearby teammate does not block a path that clears its base."""
+        plan = plan_training_team_ball_flick(
+            [
+                ("ai-piece", Vector2(0.5, 0.5), 0),
+                ("ai-piece-2", Vector2(0.56, 0.53), 3),
+            ],
+            Vector2(0.65, 0.5),
+        )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.flicking_piece_id, "ai-piece")
+
     def test_team_planner_preserves_eligible_shot_priority(self) -> None:
         """An eligible shot outranks an available progress flick."""
         plan = plan_training_team_ball_flick(
@@ -312,6 +340,100 @@ class TrainingBrainTests(unittest.TestCase):
 
         self.assertIsNotNone(plan)
         self.assertEqual(plan.action, "shot")
+
+    def test_team_planner_uses_third_touch_to_open_teammate_route(self) -> None:
+        """A third-touch setup can clear the flicker's body for a teammate."""
+        plan = plan_training_team_ball_flick(
+            [
+                ("ai-piece", Vector2(0.55, 0.5), 2),
+                ("ai-piece-2", Vector2(0.25, 0.25625), 0),
+                ("ai-piece-3", Vector2(0.25, 0.74375), 0),
+            ],
+            Vector2(0.59, 0.5),
+        )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.action, "pass")
+        self.assertEqual(plan.flicking_piece_id, "ai-piece")
+        self.assertIn(plan.receiver_piece_id, {"ai-piece-2", "ai-piece-3"})
+        self.assertNotEqual(plan.ball_target, Vector2(0.59, 0.5))
+        self.assertLessEqual(
+            distance_between_mm(Vector2(0.59, 0.5), plan.ball_target),
+            15.001,
+        )
+
+    def test_third_touch_setup_enables_teammate_to_continue(self) -> None:
+        """The setup makes contact and leaves a safe next flick for its receiver."""
+        player_positions = [
+            ("ai-piece", Vector2(0.55, 0.5), 2),
+            ("ai-piece-2", Vector2(0.25, 0.25625), 0),
+            ("ai-piece-3", Vector2(0.25, 0.74375), 0),
+        ]
+        pieces = [
+            Body(
+                body_id=piece_id,
+                position=position,
+                radius_mm=PIECE_RADIUS_MM,
+                mass=22.0,
+                team=HOME,
+                friction_mm_s2=PIECE_FRICTION_MM_S2,
+            )
+            for piece_id, position, _ in player_positions
+        ]
+        ball = Body(
+            body_id="ball",
+            position=Vector2(0.59, 0.5),
+            radius_mm=BALL_RADIUS_MM,
+            mass=2.7,
+            kind="ball",
+            friction_mm_s2=BALL_FRICTION_MM_S2,
+        )
+        world = PhysicsWorld(pieces, ball)
+        plan = plan_training_team_ball_flick(player_positions, ball.position)
+
+        self.assertIsNotNone(plan)
+        self.assertTrue(
+            flick_toward_target(
+                world,
+                plan.flicking_piece_id,
+                plan.piece_target,
+                plan.strength,
+            )
+        )
+
+        flicker_contacted_ball = False
+        for _ in range(5000):
+            world.step(1.0 / 120.0)
+            flicker_contacted_ball |= (
+                plan.flicking_piece_id in world.last_ball_contacts
+            )
+            if (
+                all(piece.velocity.length == 0.0 for piece in world.pieces)
+                and ball.velocity.length == 0.0
+            ):
+                break
+
+        self.assertTrue(flicker_contacted_ball)
+        ball_travel_mm = distance_between_mm(
+            ball.position,
+            Vector2(0.59, 0.5),
+        )
+        self.assertGreater(ball_travel_mm, 3.0)
+        self.assertLessEqual(ball_travel_mm, 30.001)
+        next_plan = plan_training_team_ball_flick(
+            [
+                (
+                    piece.body_id,
+                    piece.position,
+                    3 if piece.body_id == plan.flicking_piece_id else 0,
+                )
+                for piece in world.pieces
+            ],
+            ball.position,
+        )
+
+        self.assertIsNotNone(next_plan)
+        self.assertEqual(next_plan.flicking_piece_id, plan.receiver_piece_id)
 
     def test_planned_pass_contacts_teammate(self) -> None:
         """The planned pass physically reaches the second player piece."""

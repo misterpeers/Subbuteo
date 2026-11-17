@@ -35,6 +35,7 @@ from sim_physics import (
 from sim_pitch import (
     FRAME_BORDER_MM,
     PITCH_LENGTH_MM as RENDER_PITCH_LENGTH_MM,
+    PENALTY_AREA_WIDTH_MM,
     draw_pitch,
 )
 
@@ -52,7 +53,22 @@ BUTTON_ACTIVE_GREEN = (35, 162, 85)
 TEXT_COLOR = (242, 245, 229)
 DEFAULT_PIECE_POSITION = Vector2(0.27, 0.5)
 DEFAULT_BALL_POSITION = Vector2(0.5, 0.5)
-DEFAULT_TEAMMATE_POSITION = Vector2(0.72, 0.5)
+DEFAULT_BALL_TRAINING_PIECE_X = 0.25
+PENALTY_AREA_EDGE_Y = (
+    PITCH_WIDTH_MM - PENALTY_AREA_WIDTH_MM
+) / (2 * PITCH_WIDTH_MM)
+DEFAULT_BALL_TRAINING_PIECE_POSITION = Vector2(
+    DEFAULT_BALL_TRAINING_PIECE_X,
+    0.5,
+)
+DEFAULT_TEAMMATE_POSITION = Vector2(
+    DEFAULT_BALL_TRAINING_PIECE_X,
+    PENALTY_AREA_EDGE_Y,
+)
+DEFAULT_THIRD_PIECE_POSITION = Vector2(
+    DEFAULT_BALL_TRAINING_PIECE_X,
+    1.0 - PENALTY_AREA_EDGE_Y,
+)
 DEFAULT_TARGET_POSITION = Vector2(0.78, 0.5)
 DEFAULT_STRENGTH = 50
 STRENGTH_STEP = 5
@@ -134,15 +150,19 @@ def _create_world(include_teammate: bool = False) -> PhysicsWorld:
     )
     pieces = [piece]
     if include_teammate:
-        pieces.append(
-            Body(
-                body_id="ai-piece-2",
-                position=DEFAULT_TEAMMATE_POSITION,
-                radius_mm=PIECE_RADIUS_MM,
-                mass=22.0,
-                team=HOME,
+        for piece_id, position in (
+            ("ai-piece-2", DEFAULT_TEAMMATE_POSITION),
+            ("ai-piece-3", DEFAULT_THIRD_PIECE_POSITION),
+        ):
+            pieces.append(
+                Body(
+                    body_id=piece_id,
+                    position=position,
+                    radius_mm=PIECE_RADIUS_MM,
+                    mass=22.0,
+                    team=HOME,
+                )
             )
-        )
     ball = Body(
         body_id="ball",
         position=DEFAULT_BALL_POSITION,
@@ -158,7 +178,9 @@ def _create_training_world(include_ball: bool = False) -> PhysicsWorld:
     """Create a training world with an optional ball on the pitch."""
     world = _create_world(include_teammate=include_ball)
     world.pieces[0].position = (
-        Vector2(0.45, 0.5) if include_ball else Vector2(0.2, 0.5)
+        DEFAULT_BALL_TRAINING_PIECE_POSITION
+        if include_ball
+        else Vector2(0.2, 0.5)
     )
     world.ball.movable = include_ball
     if not include_ball:
@@ -168,7 +190,7 @@ def _create_training_world(include_ball: bool = False) -> PhysicsWorld:
 
 def _training_player_pieces(world: PhysicsWorld) -> list[Body]:
     """Return the controllable training pieces, excluding moving dummies."""
-    player_ids = {"ai-piece", "ai-piece-2"}
+    player_ids = {"ai-piece", "ai-piece-2", "ai-piece-3"}
     return [piece for piece in world.pieces if piece.body_id in player_ids]
 
 
