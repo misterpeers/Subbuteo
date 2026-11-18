@@ -575,7 +575,7 @@ def _approach_intersects_teammate(
 
     return (
         distance_between_mm(closest_point, teammate_position)
-        <= PIECE_RADIUS_MM * 2.0
+        <= 22.0
     )
 
 
