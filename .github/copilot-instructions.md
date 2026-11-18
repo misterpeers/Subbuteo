@@ -8,6 +8,9 @@
 - Do not create or modify documentation unless the user explicitly instructs you to. This includes [SUBBUTEO_SIM_RULES.md](../SUBBUTEO_SIM_RULES.md), README files, and other documentation or specification files.
 - This restriction does not prevent code changes: when implementing a requested coding task, create or modify the necessary source, test, configuration, or other implementation files. Do not update documentation as a side effect unless explicitly asked.
 
+## Git Practices
+- **Do not make commits to GitHub on the user's behalf.** The user prefers to review and manually commit all changes. After completing code or documentation changes, summarize what was modified and let the user decide whether and how to commit. Never invoke `git commit` or `git push` without explicit user instruction.
+
 ## Core Architecture Guidelines
 - Name core simulator modules with the `sim_` prefix and concise lowercase `snake_case` responsibility names (for example, `sim_pitch.py`, `sim_physics.py`, and `sim_tactics.py`).
 - Keep demos and previews separate in `demo_<module>.py` files; have them import and use the corresponding `sim_<module>.py` core module rather than duplicate its implementation.
