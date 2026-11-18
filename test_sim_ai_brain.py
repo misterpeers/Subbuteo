@@ -353,7 +353,7 @@ class TrainingBrainTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(plan)
-        self.assertEqual(plan.action, "pass")
+        self.assertEqual(plan.action, "setup")
         self.assertEqual(plan.flicking_piece_id, "ai-piece")
         self.assertIn(plan.receiver_piece_id, {"ai-piece-2", "ai-piece-3"})
         self.assertNotEqual(plan.ball_target, Vector2(0.59, 0.5))

@@ -832,7 +832,7 @@ def plan_training_team_ball_flick(
                         piece_target=setup_plan.piece_target,
                         ball_target=setup_plan.ball_target,
                         strength=setup_plan.strength,
-                        action=setup_plan.action,
+                        action="setup",
                         receiver_piece_id=setup_plan.receiver_piece_id,
                         flicking_piece_id=piece_id,
                     )
@@ -843,6 +843,12 @@ def plan_training_team_ball_flick(
     ]
     if shot_plans:
         return min(shot_plans, key=lambda plan: plan.strength)
+
+    setup_plans = [
+        plan for plan in candidate_plans if plan.action == "setup"
+    ]
+    if setup_plans:
+        return min(setup_plans, key=lambda plan: plan.strength)
 
     possession_plans = [
         plan
