@@ -272,12 +272,12 @@ placements still need to be defined by the project.
 - After the third consecutive flick, the ball must touch another friendly
   figure, an opposing figure, or the opposing goalkeeper to reset that
   figure's touch counter. A fourth consecutive flick is not allowed.
-- After two touches, the next move should be a shot, a pass, or a soft touch
-  against an opposing figure. The third touch may also be a short setup pass
-  when it offers a safer, lower-power continuation than a direct pass, leaving
-  another available player piece with a clear, safe next contact. The attacking
-  player can switch to that piece; the setup does not reset the current piece's
-  counter unless the ball touches another figure.
+- **Touch 3 decisions:** After two touches, the third move must be one of:
+  - A **shot** (if the ball is in the opponent's shooting area with a clear ray to goal)
+  - A **direct pass** (a traditional pass to a teammate)
+  - A **setup pass** (a short, angled nudge that angles the ball trajectory to create space and moves the flicker out of the way, allowing another player piece a clear, safe next contact without repositioning)
+  
+  A setup pass does not reset the current piece's touch counter unless the ball touches another figure. When the receiver contacts the ball, their touch counter resets to 0.
 - An attacking flick that misses the ball, hits a stationary defender or
   goalkeeper, or commits a foul changes possession.
 
@@ -345,6 +345,8 @@ attacking player, as specified under [Defensive block-flicks](#defensive-block-f
 
 ## AI decision priorities
 
+The attacking AI player's core objective is to score. This requires maintaining possession through multiple turns to advance the ball into the opponent's shooting area. The following priorities reflect this strategic goal.
+
 ### Attacker
 
 Apply these priorities in order; a higher priority overrides a lower one.
@@ -352,7 +354,7 @@ Apply these priorities in order; a higher priority overrides a lower one.
 1. **Score:** If the ball's center is strictly inside the opponent's shooting
    area when the flick begins (`X > 1 - 280 / L` toward increasing X;
    `X < 280 / L` toward decreasing X, where `L` is the playing-area length in
-   millimeters) and there is a clear vector to the goal mouth, shoot.
+   millimeters) **and** there is a clear vector to the goal mouth, shoot.
 2. **Keep possession and avoid fouls:** Contact the ball before any defender.
    If a direct path risks illegal contact, choose a bank shot or another
    figure. The attacking player may choose any available player piece for a
@@ -361,8 +363,16 @@ Apply these priorities in order; a higher priority overrides a lower one.
    lower required flick strength and then the least ball travel among safe
    options. A longer or stronger flick is appropriate when it is the safest
    way to continue possession; do not maximize distance for its own sake.
-   After two touches, shoot, make a direct or setup pass with a clear next
-   contact for a teammate, or softly contact an opposing figure.
+   
+   **Touch strategy:**
+   - **Touches 1-2:** Advance the ball forward with decreasing power, keeping it within safe reach of a teammate.
+   - **Touch 3 (Critical decision point):** Choose one of:
+     - **Shot** (if scoring conditions are met)
+     - **Direct Pass** (traditional pass to a teammate)
+     - **Setup Pass** (a short, angled nudge that angles the ball trajectory to create space and moves the flicker out of the way, allowing a teammate to continue possession with a clear, safe next contact)
+     
+     A setup pass does not reset the current piece's touch counter unless the ball touches another figure; the receiver's touch counter resets to 0 upon receiving the ball.
+   - **Touch reset:** After the third consecutive flick, the ball must touch another friendly figure, an opposing figure, or the opposing goalkeeper to reset that figure's counter. Never attempt a fourth consecutive flick without this reset.
 3. **Advance:** When the higher priorities permit, move the ball forward
    (`X` increasing toward the opponent's goal) or position a receiver in a
    useful forward zone.
