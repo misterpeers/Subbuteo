@@ -1,13 +1,23 @@
 """Focused tests for headless AI flick aiming and power control."""
 
 import unittest
+from unittest.mock import Mock, patch
+
+import pygame
 
 from demo_ai_flick import (
     DEFAULT_BALL_TRAINING_PIECE_POSITION,
     DEFAULT_TEAMMATE_POSITION,
     DEFAULT_THIRD_PIECE_POSITION,
+    DummyPiece,
+    TRAINING_PIECE_NUMBERS,
+    _add_dummy_body,
+    _coordinate_rows,
     _create_training_world,
     _create_world,
+    _draw_coordinates,
+    _draw_ruler,
+    _draw_training_player,
     _training_player_pieces,
 )
 from sim_ai_flick import (
@@ -82,6 +92,71 @@ class AIFlickTests(unittest.TestCase):
             DEFAULT_THIRD_PIECE_POSITION.y,
             1.0 - expected_edge_y,
         )
+
+    def test_coordinate_rows_use_stable_numbers_and_exclude_dummies(self) -> None:
+        """Positions follow piece IDs, update after movement, and hide an absent ball."""
+        world = _create_training_world(include_ball=True)
+        _add_dummy_body(world, DummyPiece(Vector2(0.7, 0.5), "x"), 0)
+        world.pieces.reverse()
+        piece = next(piece for piece in world.pieces if piece.body_id == "ai-piece-2")
+        piece.position = Vector2(0.1234, 0.8765)
+
+        rows = _coordinate_rows(world, ball_enabled=True)
+
+        self.assertEqual([label for label, _ in rows], ["P1", "P2", "P3", "Ball"])
+        self.assertEqual(rows[1][1], Vector2(0.1234, 0.8765))
+        self.assertEqual(rows[-1][1], world.ball.position)
+        self.assertEqual(_coordinate_rows(world, ball_enabled=False)[-1], ("Ball", None))
+        self.assertEqual(TRAINING_PIECE_NUMBERS[piece.body_id], 2)
+
+    def test_training_number_and_coordinate_panel_render(self) -> None:
+        """Draw the number and both coordinate units, including ball-off state."""
+        pygame.font.init()
+        field = pygame.Rect(30, 30, 522, 348)
+        surface = pygame.Surface((640, 480))
+        world = _create_training_world(include_ball=True)
+        real_font = pygame.font.Font(None, 12)
+        font = Mock(wraps=real_font)
+        with patch("demo_ai_flick.pygame.font.Font", return_value=font):
+            _draw_training_player(surface, field, world.pieces[1].position, 2)
+            _draw_coordinates(surface, field, world, ball_enabled=True)
+            _draw_coordinates(surface, field, world, ball_enabled=False)
+        rendered = [call.args[0] for call in font.render.call_args_list]
+        self.assertIn("2", rendered)
+        self.assertIn("0.2500 / 300.0", rendered)
+        self.assertIn("0.5000 / 400.0", rendered)
+        self.assertIn("OFF", rendered)
+
+    def test_coordinate_panel_shows_pitch_behind_it(self) -> None:
+        """The coordinate panel blends with whatever is behind its background."""
+        pygame.font.init()
+        field = pygame.Rect(30, 30, 522, 348)
+        surfaces = [pygame.Surface((640, 480)) for _ in range(2)]
+        surfaces[0].fill((20, 170, 50))
+        surfaces[1].fill((20, 40, 200))
+        world = _create_world()
+
+        for surface in surfaces:
+            _draw_coordinates(surface, field, world, ball_enabled=True)
+
+        position = (field.right - 8, field.top + 12)
+        green_pixel = surfaces[0].get_at(position)
+        blue_pixel = surfaces[1].get_at(position)
+        self.assertGreater(green_pixel.g, blue_pixel.g)
+        self.assertLess(green_pixel.b, blue_pixel.b)
+
+    def test_rulers_cover_both_pitch_axes(self) -> None:
+        """The Y ruler runs top-to-bottom and the existing X ruler remains."""
+        pygame.font.init()
+        field = pygame.Rect(30, 30, 600, 400)
+        surface = pygame.Surface((660, 460))
+        with patch("demo_ai_flick.pygame.draw.line", wraps=pygame.draw.line) as line:
+            _draw_ruler(surface, field)
+        segments = [(call.args[2], call.args[3]) for call in line.call_args_list]
+        self.assertEqual(len(segments), 25 + 17)
+        self.assertTrue(any(start[0] == field.left + 2 and start[1] == field.top for start, _ in segments))
+        self.assertTrue(any(start[0] == field.left + 2 and start[1] == field.bottom - 1 for start, _ in segments))
+        self.assertTrue(any(start[1] == field.bottom - 2 and start[0] == field.right - 1 for start, _ in segments))
 
     def test_flick_points_toward_target_with_selected_strength(self) -> None:
         """A half-strength flick aims at the marker with half maximum speed."""

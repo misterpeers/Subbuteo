@@ -80,12 +80,18 @@ DEFAULT_AIM_MODE: AimMode = "marker"
 TRAINING_MODE = "training"
 FREE_PLAY_MODE = "free-play"
 MENU_MODE = "menu"
+TRAINING_PIECE_NUMBERS = {
+    "ai-piece": 1,
+    "ai-piece-2": 2,
+    "ai-piece-3": 3,
+}
 UI_FONT_PATH = (
     Path(__file__).resolve().parent
     / "assets"
     / "fonts"
     / "BarlowCondensed-Medium.ttf"
 )
+PIECE_NUMBER_FONT_PATH = UI_FONT_PATH.with_name("Barlow-Black.ttf")
 
 
 @dataclass
@@ -190,8 +196,10 @@ def _create_training_world(include_ball: bool = False) -> PhysicsWorld:
 
 def _training_player_pieces(world: PhysicsWorld) -> list[Body]:
     """Return the controllable training pieces, excluding moving dummies."""
-    player_ids = {"ai-piece", "ai-piece-2", "ai-piece-3"}
-    return [piece for piece in world.pieces if piece.body_id in player_ids]
+    return [
+        piece for piece in world.pieces
+        if piece.body_id in TRAINING_PIECE_NUMBERS
+    ]
 
 
 def _add_dummy_body(world: PhysicsWorld, dummy: DummyPiece, index: int) -> None:
@@ -369,9 +377,10 @@ def _draw_training_player(
     surface: pygame.Surface,
     field: pygame.Rect,
     position: Vector2,
+    number: int,
     active: bool = False,
 ) -> None:
-    """Render the AI-controlled player piece without the free-play ball."""
+    """Render a numbered training player piece."""
     scale = field.width / RENDER_PITCH_LENGTH_MM
     radius = max(5, round(PIECE_RADIUS_MM * scale))
     center = _pitch_point(field, position)
@@ -383,6 +392,9 @@ def _draw_training_player(
     )
     pygame.draw.circle(surface, HOME_BORDER, center, radius)
     pygame.draw.circle(surface, HOME_COLOR, center, max(2, round(radius * 16 / 21)))
+    font = pygame.font.Font(str(PIECE_NUMBER_FONT_PATH), max(9, round(radius * 1.5)))
+    label = font.render(str(number), True, TEXT_COLOR)
+    surface.blit(label, label.get_rect(center=center))
 
 
 def _draw_training_ball(
@@ -434,7 +446,7 @@ def _draw_main_menu(
 
 
 def _draw_ruler(surface: pygame.Surface, field: pygame.Rect) -> None:
-    """Draw a millimeter ruler along the lower touchline."""
+    """Draw millimeter rulers along the lower and left edges of the pitch."""
     scale = field.width / RENDER_PITCH_LENGTH_MM
     baseline_y = field.bottom - 2
     tick_width = max(1, round(scale * 1.5))
@@ -476,6 +488,110 @@ def _draw_ruler(surface: pygame.Surface, field: pygame.Rect) -> None:
                 border_radius=2,
             )
             surface.blit(label, label_rect)
+
+    baseline_x = field.left + 2
+    for distance_mm in range(0, int(PITCH_WIDTH_MM) + 1, 50):
+        y = min(
+            field.bottom - 1,
+            field.top + round(distance_mm * field.height / PITCH_WIDTH_MM),
+        )
+        is_major_tick = distance_mm % 100 == 0
+        tick_length = max(
+            7 if is_major_tick else 4,
+            round((11 if is_major_tick else 6) * scale),
+        )
+        pygame.draw.line(
+            surface,
+            TEXT_COLOR,
+            (baseline_x, y),
+            (baseline_x + tick_length, y),
+            tick_width,
+        )
+        if distance_mm % 200 == 0:
+            label = font.render(f"{distance_mm}mm", True, TEXT_COLOR)
+            label_rect = label.get_rect(midleft=(baseline_x + tick_length + 3, y))
+            label_rect.top = min(
+                max(field.top + 2, label_rect.top),
+                field.bottom - label_rect.height - 2,
+            )
+            if distance_mm == PITCH_WIDTH_MM:
+                label_rect.left = max(
+                    label_rect.left,
+                    field.left + font.size("0mm")[0] + 12,
+                )
+            pygame.draw.rect(surface, PIECE_OUTLINE, label_rect.inflate(6, 2), border_radius=2)
+            surface.blit(label, label_rect)
+
+
+def _coordinate_rows(
+    world: PhysicsWorld,
+    ball_enabled: bool,
+) -> list[tuple[str, Vector2 | None]]:
+    """Return numbered player-piece and ball positions for the coordinate panel."""
+    rows: list[tuple[str, Vector2 | None]] = [
+        (f"P{TRAINING_PIECE_NUMBERS[piece.body_id]}", piece.position)
+        for piece in _training_player_pieces(world)
+    ]
+    rows.sort(key=lambda row: row[0])
+    rows.append(("Ball", world.ball.position if ball_enabled else None))
+    return rows
+
+
+def _draw_coordinates(
+    surface: pygame.Surface,
+    field: pygame.Rect,
+    world: PhysicsWorld,
+    ball_enabled: bool,
+) -> None:
+    """Render live normalized and millimeter coordinates in the upper-right pitch."""
+    rows = _coordinate_rows(world, ball_enabled)
+    font_size = max(10, min(14, round(field.width / 75)))
+    font = pygame.font.Font(str(UI_FONT_PATH), font_size)
+    label_width = font.size("POSITION")[0]
+    x_width = max(
+        font.size("-1.0000 / -1200.0")[0],
+        font.size("X (norm / mm)")[0],
+    )
+    y_width = max(
+        font.size("-1.0000 / -800.0")[0],
+        font.size("Y (norm / mm)")[0],
+    )
+    width = label_width + x_width + y_width + 36
+    row_height = font.get_linesize()
+    panel = pygame.Rect(
+        field.right - width - 5,
+        field.top + 5,
+        width,
+        (len(rows) + 1) * row_height + 8,
+    )
+    background = pygame.Surface(panel.size, pygame.SRCALPHA)
+    pygame.draw.rect(
+        background,
+        (*PIECE_OUTLINE, 150),
+        background.get_rect(),
+        border_radius=4,
+    )
+    surface.blit(background, panel.topleft)
+    x_right = panel.left + 6 + label_width + 12 + x_width
+    y_right = panel.right - 6
+    surface.blit(font.render("POSITION", True, TEXT_COLOR), (panel.left + 6, panel.top + 4))
+    for text, right in (("X (norm / mm)", x_right), ("Y (norm / mm)", y_right)):
+        heading = font.render(text, True, TEXT_COLOR)
+        surface.blit(heading, (right - heading.get_width(), panel.top + 4))
+    for index, (label, position) in enumerate(rows):
+        y = panel.top + 4 + (index + 1) * row_height
+        surface.blit(font.render(label, True, TEXT_COLOR), (panel.left + 6, y))
+        if position is None:
+            surface.blit(font.render("OFF", True, TEXT_COLOR), (x_right - font.size("OFF")[0], y))
+        else:
+            x_text = font.render(
+                f"{position.x:.4f} / {position.x * PITCH_LENGTH_MM:.1f}", True, TEXT_COLOR
+            )
+            y_text = font.render(
+                f"{position.y:.4f} / {position.y * PITCH_WIDTH_MM:.1f}", True, TEXT_COLOR
+            )
+            surface.blit(x_text, (x_right - x_text.get_width(), y))
+            surface.blit(y_text, (y_right - y_text.get_width(), y))
 
 
 def _control_rects(
@@ -1898,12 +2014,14 @@ def main() -> None:
             _draw_main_menu(screen, mouse_position)
         elif mode == FREE_PLAY_MODE:
             field = draw_pitch(screen)
-            _draw_world(screen, field, world, target_position)
             _draw_ruler(screen, field)
+            _draw_world(screen, field, world, target_position)
             _draw_hint(screen, field, hint_message)
             _draw_controls(screen, field, strength, aim_mode)
+            _draw_coordinates(screen, field, world, ball_enabled=True)
         else:
             field = draw_pitch(screen)
+            _draw_ruler(screen, field)
             _draw_training_objects(
                 screen,
                 field,
@@ -1918,6 +2036,7 @@ def main() -> None:
                     screen,
                     field,
                     player.position,
+                    TRAINING_PIECE_NUMBERS[player.body_id],
                     active=player.body_id == active_piece_id,
                 )
             _draw_training_buttons(
@@ -1936,6 +2055,7 @@ def main() -> None:
                 ball_enabled=ball_enabled,
                 piece_touches_used=piece_touch_counts.get(active_piece_id, 0),
             )
+            _draw_coordinates(screen, field, world, ball_enabled)
         pygame.display.flip()
 
     pygame.quit()
