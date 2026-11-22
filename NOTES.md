@@ -1,11 +1,3 @@
-# Future defensive training mode
-
-Continue refining the attacking training mode first. Defer implementing defense
-until that work is complete.
-
-> add a third player
-> advise AI that current player in possession tends to block others (though third player may fix it)
-
 ## Suggested first drill: shot blocking
 
 - Set up the ball, attacking piece, goal, and one defending piece.

@@ -10,6 +10,8 @@ BALL_RADIUS_MM = 11.0
 PIECE_RADIUS_MM = 9.25
 GOAL_WIDTH_MM = 120.0
 GOAL_DEPTH_MM = 60.0
+PENALTY_AREA_WIDTH_MM = 390.0
+GOAL_AREA_WIDTH_MM = 240.0
 SHOOTING_AREA_DEPTH_MM = 280.0
 WALL_RESTITUTION = 0.65
 PIECE_RESTITUTION = 0.6
@@ -382,6 +384,12 @@ class PhysicsWorld:
         goal_half_opening = (GOAL_WIDTH_MM / 2.0 - ball.radius_mm)
         ball_y_mm = ball.position.y * PITCH_WIDTH_MM
         in_goal_mouth = abs(ball_y_mm - PITCH_WIDTH_MM / 2.0) <= goal_half_opening
+        goal_line_offset_mm = abs(ball_y_mm - PITCH_WIDTH_MM / 2.0)
+        in_penalty_area_span = (
+            goal_line_offset_mm <= PENALTY_AREA_WIDTH_MM / 2.0
+        )
+        in_goal_area_span = goal_line_offset_mm <= GOAL_AREA_WIDTH_MM / 2.0
+        goal_kick_contact = in_penalty_area_span and in_goal_area_span
 
         if ball.position.y < radius_y:
             ball.position = Vector2(ball.position.x, radius_y)
@@ -402,25 +410,29 @@ class PhysicsWorld:
             else:
                 ball.position = Vector2(radius_x, ball.position.y)
                 self._reflect_velocity(ball, "x", WALL_RESTITUTION)
-                self._transfer_possession()
+                if goal_kick_contact:
+                    self._transfer_possession()
         elif ball.position.x > 1.0 and ball.velocity.x > 0:
             if in_goal_mouth:
                 self._handle_goal_line("away")
             else:
                 ball.position = Vector2(1.0 - radius_x, ball.position.y)
                 self._reflect_velocity(ball, "x", WALL_RESTITUTION)
-                self._transfer_possession()
+                if goal_kick_contact:
+                    self._transfer_possession()
 
         if ball.position.x >= 0.0 and ball.velocity.x < 0:
             if ball.position.x < radius_x and not in_goal_mouth:
                 ball.position = Vector2(radius_x, ball.position.y)
                 self._reflect_velocity(ball, "x", WALL_RESTITUTION)
-                self._transfer_possession()
+                if goal_kick_contact:
+                    self._transfer_possession()
         elif ball.position.x <= 1.0 and ball.velocity.x > 0:
             if ball.position.x > 1.0 - radius_x and not in_goal_mouth:
                 ball.position = Vector2(1.0 - radius_x, ball.position.y)
                 self._reflect_velocity(ball, "x", WALL_RESTITUTION)
-                self._transfer_possession()
+                if goal_kick_contact:
+                    self._transfer_possession()
 
     def _handle_goal_line(self, goal_side: str) -> None:
         """Score an eligible shot or stop an ineligible attempt in the net."""

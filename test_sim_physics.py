@@ -7,6 +7,8 @@ from sim_physics import (
     HOME,
     BALL_FRICTION_MM_S2,
     BALL_RADIUS_MM,
+    GOAL_AREA_WIDTH_MM,
+    PENALTY_AREA_WIDTH_MM,
     PITCH_LENGTH_MM,
     PITCH_WIDTH_MM,
     Body,
@@ -80,10 +82,55 @@ class PhysicsWorldTests(unittest.TestCase):
         self.assertEqual(world.ball_in_net, AWAY)
         self.assertEqual(world.ball.velocity, Vector2(0.0, 0.0))
 
-    def test_goal_line_outside_goal_mouth_rebounds_with_possession_transfer(
+    def test_goal_line_within_both_areas_rebounds_and_transfers_possession(
         self,
     ) -> None:
-        """A non-mouth goal-line contact rebounds and transfers possession."""
+        """A non-mouth contact inside both goal areas transfers possession."""
+        y_offset_mm = GOAL_AREA_WIDTH_MM / 3.0
+        ball_y = (PITCH_WIDTH_MM / 2.0 + y_offset_mm) / PITCH_WIDTH_MM
+
+        for ball_x, velocity_x, expected_velocity_x in (
+            (0.5 / PITCH_LENGTH_MM, -100.0, 65.0),
+            (1.0 - 0.5 / PITCH_LENGTH_MM, 100.0, -65.0),
+        ):
+            with self.subTest(ball_x=ball_x):
+                world = _empty_world(Vector2(ball_x, ball_y))
+                world.ball.velocity = Vector2(velocity_x, 0.0)
+                world.possession = HOME
+                world.last_flick_team = HOME
+
+                world.step(1.0 / 60.0)
+
+                self.assertEqual(world.possession, AWAY)
+                self.assertAlmostEqual(
+                    world.ball.velocity.x,
+                    expected_velocity_x,
+                )
+
+    def test_goal_line_within_penalty_but_outside_goal_area_retains_possession(
+        self,
+    ) -> None:
+        """The penalty area alone is insufficient to transfer possession."""
+        y_offset_mm = (
+            GOAL_AREA_WIDTH_MM + PENALTY_AREA_WIDTH_MM
+        ) / 4.0
+        ball_y = (PITCH_WIDTH_MM / 2.0 + y_offset_mm) / PITCH_WIDTH_MM
+        world = _empty_world(
+            Vector2(0.5 / PITCH_LENGTH_MM, ball_y)
+        )
+        world.ball.velocity = Vector2(-100.0, 0.0)
+        world.possession = HOME
+        world.last_flick_team = HOME
+
+        world.step(1.0 / 60.0)
+
+        self.assertEqual(world.possession, HOME)
+        self.assertAlmostEqual(world.ball.velocity.x, 65.0)
+
+    def test_goal_line_outside_both_areas_rebounds_without_possession_transfer(
+        self,
+    ) -> None:
+        """A goal-line contact outside both areas preserves possession."""
         world = _empty_world(Vector2(0.5 / PITCH_LENGTH_MM, 0.2))
         world.ball.velocity = Vector2(-100.0, 0.0)
         world.possession = HOME
@@ -91,7 +138,7 @@ class PhysicsWorldTests(unittest.TestCase):
 
         world.step(1.0 / 60.0)
 
-        self.assertEqual(world.possession, AWAY)
+        self.assertEqual(world.possession, HOME)
         self.assertAlmostEqual(world.ball.velocity.x, 65.0)
 
     def test_eligible_shot_scores_and_enters_damped_net(self) -> None:

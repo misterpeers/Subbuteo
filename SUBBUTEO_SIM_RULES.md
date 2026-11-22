@@ -4,6 +4,20 @@ This is the project's self-contained, canonical rules reference. Unspecified
 implementation details are listed under [Items to confirm](#items-to-confirm)
 rather than silently resolved.
 
+# Subbuteo game
+
+Subbuteo is a tabletop game that recreates association football with miniature
+player figures, a ball, goals, and a playing surface. Participants flick their
+figures with a finger to strike the ball, pass, defend, and try to score more
+goals than the opposing side. A goalkeeper is controlled separately on a rod.
+
+This simulator models that game with two AI-controlled teams. Each AI player
+chooses actions for its field pieces and goalkeeper; the pieces are the
+physical figures on the pitch, not the AI players themselves. The simulation
+focuses on flicks, ball and piece movement, possession, defensive responses,
+and scoring, with its own explicitly stated rules where it differs from
+traditional tabletop play.
+
 ## Module naming convention
 
 Core simulator modules use the `sim_` prefix followed by a concise lowercase
@@ -34,11 +48,14 @@ license in `assets/fonts/` rather than relying on system-installed fonts.
 - **Teams:** One goalkeeper plus 4, 5, or 10 field figures (5-, 6-, or
   11-a-side).
 - **Duration:** Two 15-minute halves, simulated or real-time.
-- **Turn cycle:** Attacker decision and flick, physics resolution until the
-  ball stops, state checks, then the next turn. The defender may make one
-  block-flick after each attacking flick.
-- **Possession:** Fouls, a missed attacking flick, or the ball hitting a
-  stationary defender or goalkeeper can change possession.
+- **Turn cycle:** The attacking player flicks and physics resolves until the
+  attack settles. The defending player then has a 0.10-second response window
+  to move one field piece with a block-flick. If the defender does not move a
+  piece, play continues without a block-flick.
+- **Possession:** An attacking foul, a missed attacking flick, or the ball
+  contacting a defending field piece or goalkeeper changes possession. An
+  illegal defensive block-flick instead resets all attacking field-piece
+  touch counts and returns play to the attacker.
 
 ## Project dictionary
 
@@ -56,6 +73,8 @@ Use these terms consistently in project discussions, documentation, and code:
 | **Flick** | An impulse action taken by a player piece to contact or move the ball. A defensive block-flick is a separate defensive positioning action. |
 | **Possession** | The team's right to make the next attacking flick, subject to the turn and foul rules. |
 | **Shooting area** | The region strictly inside the 280 mm shooting line at the target goal. Shot eligibility is evaluated from the ball center when the flick begins. |
+| **Penalty area (18-yard box)** | The larger marked area in front of the goal. Goal-line possession transfers occur only within the overlapping goal-line spans of this area and the goal area. |
+| **Goal area (6-yard box)** | The smaller marked area inside the penalty area. The ball must contact the goal-line span within both areas for possession to transfer. |
 | **Goal mouth** | The opening between the goalposts; the only opening in the pitch perimeter. |
 
 ## Pitch and physical specifications
@@ -78,8 +97,15 @@ Use these terms consistently in project discussions, documentation, and code:
 | Side-wall coefficient of restitution | 0.65 recommended |
 
 The player-piece base is described as concave/rounded, allowing sliding,
-spinning, and curling trajectories. These are qualitative specifications; no
-additional profile dimensions or spin parameters are defined.
+spinning, and curling trajectories. The current simulator uses its existing
+friction model; spin and curling are future enhancements and are not currently
+simulated. These are qualitative physical specifications; no additional
+profile dimensions or spin parameters are defined.
+
+For collision calculations, model the ball and field player pieces as circles
+using their specified radii. Model the goalkeeper with a rectangular footprint,
+not a circle. Its physical pitch-length thickness remains unresolved; do not
+assume that the 8 mm rendering thickness is its collision thickness.
 
 ### Coordinates
 
@@ -199,19 +225,28 @@ or gameplay rules.
   the same recommended coefficient of restitution, `0.65`.
 - **Touchlines:** The ball rebounds and stays in play; a touchline rebound
   does not change possession.
-- **Goal lines:** When the ball contacts either goal line, it rebounds and
-  possession changes to the opposing player. This also applies when an
-  ineligible attempt passes through the goal mouth: treat it as a goal-line
-  rebound and change possession.
-- **Goal mouth:** The opening between the goalposts is the sole exception to
-  the goal-line rebound. A ball may pass through it without rebounding only to
-  score under [Goals and shooting](#goals-and-shooting).
+- **Goal lines:** The ball rebounds when it contacts either goal line. If the
+  ball's center projects onto the goal-line spans within both the penalty area
+  and goal area at contact, possession transfers to the defending player (a
+  goal-kick outcome in this simulation). If its projection is outside either
+  span, the ball rebounds and the attacking player retains possession.
+- **Goal mouth:** The opening between the goalposts is the only place where
+  the ball can cross the goal-line plane into the net without rebounding from
+  the goal line. Passing through the goal mouth does not by itself count as a
+  goal; see [Goals and shooting](#goals-and-shooting).
+- **Ineligible attempt:** A non-own-goal attempt that passes through the goal
+  mouth from outside the shooting area enters the net but is not scored. It
+  does not rebound from the goal-line plane; in the current simulation it is
+  stopped inside the net. Possession transfers to the defending player because
+  the goal mouth lies within both the goal-area and penalty-area spans. This is
+  a possession change from the current board state, not a traditional
+  goal-kick restart.
 - **Goal net:** After a valid goal crosses the goal line through the goal
   mouth, the inside sides and back of the net should rebound the ball with
   stronger damping than the pitch perimeter (a lower coefficient of
   restitution than `0.65`). Choose the exact net coefficient when implementing
   the physics. These post-goal rebounds do not undo the goal.
-- Traditional throw-ins, goal-line restarts, corner-flicks, and free-flicks
+- Traditional throw-ins, corner-flicks, and free-flicks
   are removed.
 
 ## Formations and team setup
@@ -260,6 +295,10 @@ placements still need to be defined by the project.
 ### Attacking flicks
 
 - A figure may make up to **three consecutive flicks/touches** of the ball.
+- The attacking piece must contact the ball before it contacts any other game
+  piece. If it contacts a teammate before the ball, possession transfers to
+  the opposing player. After ball contact, collisions with other pieces are
+  allowed, subject to the foul rules below.
 - The attacking player may switch to another player piece at any time and does
   not need to use all three flicks with one piece. A different player piece
   may take the next flick if it can legally contact the ball, including from
@@ -272,37 +311,51 @@ placements still need to be defined by the project.
 - After the third consecutive flick, the ball must touch another friendly
   figure, an opposing figure, or the opposing goalkeeper to reset that
   figure's touch counter. A fourth consecutive flick is not allowed.
+- A setup pass may be used on a piece's final flick before switching to
+  another piece; that final flick need not be the piece's third touch. Use it
+  to clear the flicking piece from the ball's path and create a route for the
+  next piece, especially when an ordinary forward pass is not available.
 - **Touch 3 decisions:** After two touches, the third move must be one of:
   - A **shot** (if the ball is in the opponent's shooting area with a clear ray to goal)
   - A **direct pass** (a traditional pass to a teammate)
   - A **setup pass** (a short, angled nudge that angles the ball trajectory to create space and moves the flicker out of the way, allowing another player piece a clear, safe next contact without repositioning)
   
-  A setup pass does not reset the current piece's touch counter unless the ball touches another figure. When the receiver contacts the ball, their touch counter resets to 0.
-- An attacking flick that misses the ball, hits a stationary defender or
-  goalkeeper, or commits a foul changes possession.
+  A setup pass counts as a touch by the flicking piece; it does not reset that
+  piece's touch counter. Contact between the ball and a different figure ends
+  the flicking piece's consecutive-touch sequence. A receiving player piece's
+  touch counter is set to zero, so its next flick is touch one.
+- An attacking flick that misses the ball changes possession. If the ball
+  contacts a defending field piece, whether stationary or moving, or the
+  goalkeeper, possession transfers to the defending player. Resolve the
+  resulting physical motion before the next attacking flick.
 
 ### Defensive block-flicks
 
-- After each attacking flick, the defender may make one block-flick to
-  intercept a shot or passing lane.
-- A block-flick must not touch the ball or any attacking figure. If it would,
-  invalidate the block and return play to the attacker.
+- After the attack settles, the defender may make one block-flick during the
+  0.10-second response window, moving one field piece to intercept a shot or
+  passing lane. The defender may also choose not to move; play then continues
+  normally.
+- The block-flick action must not cause the defending piece to contact the
+  ball or an attacking figure. An illegal block-flick is invalidated, play
+  returns to the attacking player, and all attacking field-piece touch
+  counters reset to zero.
 
 ### Fouls
 
-When a player commits a foul or other illegal move covered by these rules,
-the sanction is an immediate change of possession to the fouled team. The
-fouled player takes over from the current board state: do not award a free
-kick/free-flick, reset positions, or pause play for repositioning.
+For an attacking foul listed below, possession transfers immediately to the
+defending player from the current board state. No free kick/free-flick,
+position reset, or touch-count reset is awarded.
 
 1. **Illegal contact:** An attacking figure hits a defender or goalkeeper
    before touching the ball.
-2. **Smashing:** An attacking flick displaces two or more defending figures
+2. **Teammate contact:** An attacking figure hits a teammate before touching
+   the ball.
+3. **Smashing:** An attacking flick displaces two or more defending figures
    in their half, unless it is a shot on goal.
 
-For these attacking fouls, possession transfers to the defending player.
-An illegal defensive block-flick is invalidated and play returns to the
-attacking player, as specified under [Defensive block-flicks](#defensive-block-flicks).
+An illegal defensive block-flick is handled differently: it is invalidated,
+possession remains with the attacking player, and all attacking field-piece
+touch counters reset to zero.
 
 ## Kick-off and restarts
 
@@ -316,38 +369,53 @@ attacking player, as specified under [Defensive block-flicks](#defensive-block-f
   The ball may be passed backward into the attacker's own half to retain
   possession; it does not have to enter the opponent's half on the first flick.
 - A ball contacting a touchline rebounds without changing possession.
-- A ball contacting a goal line rebounds and transfers possession to the
-  opposing player, except when it scores a valid goal.
+- A ball contacting a goal line rebounds. Possession transfers only when
+  the ball's center projects onto the goal-line spans within both the penalty
+  area and the goal area at contact, except when it scores a valid goal.
 
 ## Goals and shooting
 
-- A valid goal is scored only when the ball is shot from completely inside
-  the target's shooting area, within 280 mm of that goal line. Judge the
-  **ball's center position when the attacking flick begins**; the flicking
-  figure's position does not determine eligibility. The center must be
-  strictly inside the shooting area: a ball on the shooting line is outside.
-  If `L` is the playing-area length in millimeters, the normalized boundary
-  is `X = 1 - 280 / L`. Eligibility is `X > 1 - 280 / L` when attacking toward
-  increasing X, and `X < 280 / L` when attacking toward decreasing X.
-- A shot from outside or on the shooting line cannot score. If it passes
-  through the goal mouth, it is treated as an ineligible attempt: the ball
-  rebounds from the goal-line plane and possession changes to the opposing
-  player.
-- Own goals may be scored from anywhere on the pitch.
+- A goal against the opposing team is scored only when the ball is shot from
+  completely inside the target's shooting area, within 280 mm of that goal
+  line. Judge the **ball's center position when the attacking flick begins**;
+  the flicking figure's position does not determine eligibility. The center
+  must be strictly inside the shooting area: a ball on the shooting line is
+  outside. If `L` is the playing-area length in millimeters, the normalized
+  boundary is `X = 1 - 280 / L`. Eligibility is `X > 1 - 280 / L` when
+  attacking toward increasing X, and `X < 280 / L` when attacking toward
+  decreasing X.
+- A non-own-goal shot from outside or on the shooting line cannot score. If
+  it passes through the goal mouth, the ball enters the net but is not counted
+  as a goal; it does not rebound from the goal-line plane. Possession changes
+  as specified under [Boundaries and ball-out behavior](#boundaries-and-ball-out-behavior).
+- A ball entering a team's own goal is an own goal and may score from anywhere
+  on the pitch, regardless of the shooting-area restriction.
 
 ## Goalkeeper
 
 - The goalkeeper is controlled on a rod and operates behind or within the
   goal area.
-- The goalkeeper may make up to three consecutive saves/touches before
-  another figure must play the ball.
+- Any ball collision with the goalkeeper counts as a save/touch. The
+  goalkeeper may make up to three consecutive saves/touches before another
+  field player piece must play the ball. Contact between the ball and any
+  field player piece resets the goalkeeper's touch count.
 - The goalkeeper must not extend past the goal-area line.
+- Goalkeeper behavior is not currently incorporated in the simulator; these
+  rules are the target behavior for a future implementation.
 
-## AI decision priorities
+## AI objectives and decision priorities
 
-The attacking AI player's core objective is to score. This requires maintaining possession through multiple turns to advance the ball into the opponent's shooting area. The following priorities reflect this strategic goal.
+The match objective is to score more goals than the opposing team. At any
+moment, one AI player is the attacker and the opposing AI player is the
+defender. These roles switch when possession changes.
 
 ### Attacker
+
+The attacking player's primary objective is to score. To do so, it should
+preserve possession across turns, advance the ball toward the opponent's goal,
+and create a safe opportunity to shoot from the shooting area. It may switch
+field pieces at any time. Avoiding fouls and choosing controlled flicks take
+priority over maximizing distance.
 
 Apply these priorities in order; a higher priority overrides a lower one.
 
@@ -379,8 +447,14 @@ Apply these priorities in order; a higher priority overrides a lower one.
 
 ### Defender
 
+The defending player's primary objective is to prevent a goal while keeping
+the block-flick legal. During the response window, it may move one field piece
+to obstruct a shot or passing route. If it does not make a move, the attack
+continues.
+
 1. **Avoid illegal contact:** Never touch the ball or an attacking figure
-   during a block-flick. Discard an invalid block.
+   during a block-flick. An invalid block is discarded and resets all
+   attacking field-piece touch counters to zero.
 2. **Block shots:** When the ball is in or near the shooting area, place a
    figure on the line between the ball and the center of the goal mouth.
 3. **Intercept passes:** Otherwise, position a figure between the ball and
@@ -392,14 +466,29 @@ rebound vectors and the wall restitution value.
 
 ## Engine state cycle
 
-1. Decide the move.
-2. Apply the flick impulse/vector.
-3. Resolve physics until velocity reaches zero.
-4. Check possession, goal, and foul states.
-5. Continue with the next turn.
+1. The attacking player chooses a field piece and makes a flick.
+2. Apply the flick impulse and resolve physics until the attack settles.
+3. Check contact, foul, possession, and goal states.
+4. If play continues, give the defender a 0.10-second window to make one
+   block-flick or skip the response.
+5. Validate any block-flick, then continue with the next attacking flick.
+
+For a future physics refinement, resolve competing collision events in order
+of time of contact rather than by arbitrary processing order.
 
 ## Items to confirm
 
+- **Goalkeeper collision thickness:** The goalkeeper collision shape is
+  rectangular, but its physical thickness remains undecided between the 6 mm
+  reference and the 8 mm rendering compromise.
+- **Collision event ties:** Define a tie-break rule for events with the same
+  time of contact when implementing time-ordered collision handling.
+- **Clear paths and bank shots:** Define how shot and pass paths account for
+  piece footprints and rebounds, and how the attacker selects bank shots.
+- **Setup-pass geometry:** Define any minimum movement or angle that
+  distinguishes a setup pass from an ordinary short pass.
+- **Block-flick persistence:** Confirm whether a defending piece remains in
+  its new position after a block-flick.
 - **Formation placement:** The source gives role line positions but not all
   Y-coordinates or spacing for the scalable lineup templates. Complete these
   when the pitch and player positions are defined in more detail.
