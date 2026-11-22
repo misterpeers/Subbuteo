@@ -18,30 +18,6 @@ focuses on flicks, ball and piece movement, possession, defensive responses,
 and scoring, with its own explicitly stated rules where it differs from
 traditional tabletop play.
 
-## Module naming convention
-
-Core simulator modules use the `sim_` prefix followed by a concise lowercase
-`snake_case` name describing the module's responsibility. For example,
-`sim_pitch.py` contains reusable pitch functionality, `sim_physics.py` handles
-physics, and `sim_tactics.py` builds simulator tactics. Demos and previews use
-separate `<module>_demo.py` files and import the corresponding core module
-rather than duplicating its implementation.
-
-### Documentation standards
-
-All code files, functions, methods, and classes should include docstrings. Use
-multi-line docstrings that describe the purpose of the object and, where
-applicable, list arguments and return values or side effects clearly.
-
-### UI and graphical typography
-
-Use the Barlow font family as the preferred typeface for user-interface and
-graphical text. Use Barlow Black for prominent score numerals and Barlow
-Condensed Medium for team labels where a clear typographic weight contrast is
-desired. Keep changing numeric values in fixed-width or tabular cells so their
-layout does not shift as digits change. Use the bundled font files and their
-license in `assets/fonts/` rather than relying on system-installed fonts.
-
 ## Match at a glance
 
 - **View:** 2D, top-down.
