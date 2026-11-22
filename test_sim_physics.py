@@ -314,6 +314,92 @@ class PhysicsWorldTests(unittest.TestCase):
         self.assertGreaterEqual(estimated_stop_distance, 750.0)
         self.assertLessEqual(estimated_stop_distance, 1050.0)
 
+    def test_piece_to_piece_contact_is_recorded_for_the_step(self) -> None:
+        """Pieces that collide are listed, and the record clears next step."""
+        first = Body(
+            body_id="home-0",
+            position=Vector2(0.40, 0.5),
+            radius_mm=9.25,
+            mass=22.0,
+            team=HOME,
+        )
+        second = Body(
+            body_id="away-0",
+            position=Vector2(0.40 + 15.0 / PITCH_LENGTH_MM, 0.5),
+            radius_mm=9.25,
+            mass=22.0,
+            team=AWAY,
+        )
+        ball = Body(
+            body_id="ball",
+            position=Vector2(0.8, 0.5),
+            radius_mm=BALL_RADIUS_MM,
+            mass=2.7,
+            kind="ball",
+        )
+        world = PhysicsWorld([first, second], ball)
+
+        world.step(1.0 / 60.0)
+        self.assertIn(frozenset(("home-0", "away-0")), world.last_piece_contacts)
+
+        world.step(1.0 / 60.0)
+        self.assertEqual(world.last_piece_contacts, set())
+
+    def test_clone_evolves_independently_of_the_original(self) -> None:
+        """Flicking and stepping a clone leaves the original world unchanged."""
+        piece = Body(
+            body_id="home-0",
+            position=Vector2(0.45, 0.5),
+            radius_mm=9.25,
+            mass=22.0,
+            team=HOME,
+        )
+        ball = Body(
+            body_id="ball",
+            position=Vector2(0.5, 0.5),
+            radius_mm=BALL_RADIUS_MM,
+            mass=2.7,
+            kind="ball",
+            friction_mm_s2=BALL_FRICTION_MM_S2,
+        )
+        world = PhysicsWorld([piece], ball)
+        clone = world.clone()
+
+        clone.flick("home-0", Vector2(-200.0, 0.0))
+        for _ in range(120):
+            clone.step(1.0 / 60.0)
+
+        self.assertEqual(world.pieces[0].position, Vector2(0.45, 0.5))
+        self.assertEqual(world.ball.position, Vector2(0.5, 0.5))
+        self.assertIsNone(world.possession)
+        self.assertNotEqual(clone.ball.position, world.ball.position)
+        self.assertEqual(clone.last_flick_team, HOME)
+        self.assertIsNone(world.last_flick_team)
+        self.assertIsNot(clone.pieces[0], world.pieces[0])
+        self.assertIsNot(clone.last_ball_contacts, world.last_ball_contacts)
+
+    def test_clone_preserves_scores_and_goal_state(self) -> None:
+        """A clone starts with the same score, possession and net state."""
+        world = _empty_world(Vector2(0.5, 0.5))
+        world.home_score = 2
+        world.away_score = 1
+        world.possession = AWAY
+        world.ball_in_net = "away"
+        world.last_flick_team = HOME
+
+        clone = world.clone()
+
+        self.assertEqual(
+            (
+                clone.home_score,
+                clone.away_score,
+                clone.possession,
+                clone.ball_in_net,
+                clone.last_flick_team,
+            ),
+            (2, 1, AWAY, "away", HOME),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

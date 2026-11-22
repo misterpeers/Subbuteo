@@ -6,11 +6,13 @@ from math import sqrt
 from sim_ai_brain import (
     Obstacle,
     TargetArea,
-    choose_training_waypoint,
+    choose_waypoint,
     estimate_contact_strength,
-    plan_training_ball_flick,
-    plan_training_team_ball_flick,
-    training_flick_strength,
+    plan_piece_flick,
+    plan_team_flick,
+    plan_team_flick_candidates,
+    sample_flick_candidates,
+    waypoint_flick_strength,
 )
 from sim_ai_flick import distance_between_mm, flick_toward_target
 from sim_physics import (
@@ -99,17 +101,17 @@ class ContactEstimateTests(unittest.TestCase):
         )
 
 
-class TrainingBrainTests(unittest.TestCase):
-    """Check headless AI navigation toward target areas."""
+class BrainPlanningTests(unittest.TestCase):
+    """Check headless AI navigation and ball-contact planning."""
 
-    def test_training_move_avoids_obstacles(self) -> None:
+    def test_move_avoids_obstacles(self) -> None:
         """The AI reaches the target without crossing a blocking rectangle."""
         obstacle = Obstacle(center=Vector2(0.5, 0.5), size=Vector2(0.18, 0.18))
         target = TargetArea(center=Vector2(0.8, 0.5), radius=0.06)
         position = Vector2(0.25, 0.5)
 
         for _ in range(100):
-            waypoint = choose_training_waypoint(position, target, [obstacle])
+            waypoint = choose_waypoint(position, target, [obstacle])
             if waypoint is None:
                 break
             self.assertFalse(
@@ -120,20 +122,20 @@ class TrainingBrainTests(unittest.TestCase):
         self.assertTrue(target.contains(position))
 
     def test_target_area_contains_piece_inside_circle(self) -> None:
-        """A target area marks a reachable circle for the training AI."""
+        """A target area marks a reachable circle for the AI player."""
         target = TargetArea(center=Vector2(0.8, 0.5), radius=0.06)
         self.assertTrue(target.contains(Vector2(0.8, 0.5)))
         self.assertFalse(target.contains(Vector2(0.87, 0.5)))
 
-    def test_training_waypoint_stops_inside_target_area(self) -> None:
+    def test_waypoint_stops_inside_target_area(self) -> None:
         """The AI does not keep stepping once it reaches the target area."""
         target = TargetArea(center=Vector2(0.8, 0.5), radius=0.06)
-        waypoint = choose_training_waypoint(Vector2(0.81, 0.5), target)
+        waypoint = choose_waypoint(Vector2(0.81, 0.5), target)
         self.assertIsNone(waypoint)
 
-    def test_training_flick_strength_is_conservative(self) -> None:
+    def test_waypoint_flick_strength_is_conservative(self) -> None:
         """Flick power maps a waypoint distance to a sub-maximal impulse."""
-        strength = training_flick_strength(
+        strength = waypoint_flick_strength(
             Vector2(0.2, 0.5),
             Vector2(0.3, 0.5),
         )
@@ -149,7 +151,7 @@ class TrainingBrainTests(unittest.TestCase):
             size=Vector2(0.08, 0.12),
             padding=0.0,
         )
-        plan = plan_training_ball_flick(
+        plan = plan_piece_flick(
             piece_position,
             ball_position,
             [blocker],
@@ -170,14 +172,14 @@ class TrainingBrainTests(unittest.TestCase):
 
     def test_ball_flick_plan_rejects_unreachable_contact(self) -> None:
         """The AI does not launch a ball-mode flick outside contact range."""
-        plan = plan_training_ball_flick(
+        plan = plan_piece_flick(
             Vector2(0.0, 0.5),
             Vector2(0.5, 0.5),
         )
 
         self.assertIsNone(plan)
 
-    def test_ball_training_uses_a_short_contact_flick(self) -> None:
+    def test_ball_flick_uses_a_short_contact_flick(self) -> None:
         """A routine advance stays controlled and keeps the piece near the ball."""
         piece = Body(
             body_id="ai-piece",
@@ -195,7 +197,7 @@ class TrainingBrainTests(unittest.TestCase):
             kind="ball",
         )
         world = PhysicsWorld([piece], ball)
-        plan = plan_training_ball_flick(piece.position, ball.position)
+        plan = plan_piece_flick(piece.position, ball.position)
         self.assertIsNotNone(plan)
         self.assertLessEqual(
             distance_between_mm(ball.position, plan.ball_target),
@@ -227,7 +229,7 @@ class TrainingBrainTests(unittest.TestCase):
         piece_position = Vector2(0.55, 0.5)
         ball_position = Vector2(0.62, 0.5)
         receiver_position = Vector2(0.72, 0.5)
-        plan = plan_training_ball_flick(
+        plan = plan_piece_flick(
             piece_position,
             ball_position,
             piece_touches_used=2,
@@ -241,7 +243,7 @@ class TrainingBrainTests(unittest.TestCase):
 
     def test_second_touch_cannot_be_followed_by_another_advance(self) -> None:
         """Without a teammate or eligible shot, the AI refuses a third advance."""
-        plan = plan_training_ball_flick(
+        plan = plan_piece_flick(
             Vector2(0.55, 0.5),
             Vector2(0.62, 0.5),
             piece_touches_used=2,
@@ -251,7 +253,7 @@ class TrainingBrainTests(unittest.TestCase):
 
     def test_eligible_shot_takes_priority_over_pass_after_two_flicks(self) -> None:
         """A clear eligible shot remains the top priority on the third flick."""
-        plan = plan_training_ball_flick(
+        plan = plan_piece_flick(
             Vector2(0.82, 0.5),
             Vector2(0.85, 0.5),
             piece_touches_used=2,
@@ -265,7 +267,7 @@ class TrainingBrainTests(unittest.TestCase):
 
     def test_fourth_consecutive_piece_flick_is_never_planned(self) -> None:
         """A piece cannot exceed the three-consecutive-touch rule."""
-        plan = plan_training_ball_flick(
+        plan = plan_piece_flick(
             Vector2(0.55, 0.5),
             Vector2(0.62, 0.5),
             piece_touches_used=3,
@@ -276,7 +278,7 @@ class TrainingBrainTests(unittest.TestCase):
 
     def test_team_planner_switches_to_piece_behind_ball_diagonally(self) -> None:
         """A teammate behind the ball can take over from a diagonal approach."""
-        plan = plan_training_team_ball_flick(
+        plan = plan_team_flick(
             [
                 ("ai-piece", Vector2(0.8, 0.5), 3),
                 ("ai-piece-2", Vector2(0.5, 0.62), 0),
@@ -290,7 +292,7 @@ class TrainingBrainTests(unittest.TestCase):
 
     def test_team_planner_can_switch_before_piece_uses_touch_limit(self) -> None:
         """A nearby teammate may be chosen while the active piece has touches left."""
-        plan = plan_training_team_ball_flick(
+        plan = plan_team_flick(
             [
                 ("ai-piece", Vector2(0.25, 0.18), 1),
                 ("ai-piece-2", Vector2(0.59, 0.59), 0),
@@ -303,7 +305,7 @@ class TrainingBrainTests(unittest.TestCase):
 
     def test_team_planner_rejects_an_approach_through_a_teammate(self) -> None:
         """A blocked candidate is skipped in favor of a clear teammate route."""
-        plan = plan_training_team_ball_flick(
+        plan = plan_team_flick(
             [
                 ("ai-piece", Vector2(0.5, 0.5), 0),
                 ("ai-piece-2", Vector2(0.56, 0.5), 3),
@@ -317,7 +319,7 @@ class TrainingBrainTests(unittest.TestCase):
 
     def test_team_planner_allows_a_near_miss_of_a_teammate(self) -> None:
         """A nearby teammate does not block a path that clears its base."""
-        plan = plan_training_team_ball_flick(
+        plan = plan_team_flick(
             [
                 ("ai-piece", Vector2(0.5, 0.5), 0),
                 ("ai-piece-2", Vector2(0.56, 0.53), 3),
@@ -330,7 +332,7 @@ class TrainingBrainTests(unittest.TestCase):
 
     def test_team_planner_preserves_eligible_shot_priority(self) -> None:
         """An eligible shot outranks an available progress flick."""
-        plan = plan_training_team_ball_flick(
+        plan = plan_team_flick(
             [
                 ("ai-piece", Vector2(0.82, 0.5), 0),
                 ("ai-piece-2", Vector2(0.72, 0.62), 0),
@@ -343,7 +345,7 @@ class TrainingBrainTests(unittest.TestCase):
 
     def test_team_planner_uses_third_touch_to_open_teammate_route(self) -> None:
         """A third-touch setup can clear the flicker's body for a teammate."""
-        plan = plan_training_team_ball_flick(
+        plan = plan_team_flick(
             [
                 ("ai-piece", Vector2(0.55, 0.5), 2),
                 ("ai-piece-2", Vector2(0.25, 0.25625), 0),
@@ -389,7 +391,7 @@ class TrainingBrainTests(unittest.TestCase):
             friction_mm_s2=BALL_FRICTION_MM_S2,
         )
         world = PhysicsWorld(pieces, ball)
-        plan = plan_training_team_ball_flick(player_positions, ball.position)
+        plan = plan_team_flick(player_positions, ball.position)
 
         self.assertIsNotNone(plan)
         self.assertTrue(
@@ -420,7 +422,7 @@ class TrainingBrainTests(unittest.TestCase):
         )
         self.assertGreater(ball_travel_mm, 3.0)
         self.assertLessEqual(ball_travel_mm, 30.001)
-        next_plan = plan_training_team_ball_flick(
+        next_plan = plan_team_flick(
             [
                 (
                     piece.body_id,
@@ -461,7 +463,7 @@ class TrainingBrainTests(unittest.TestCase):
             kind="ball",
         )
         world = PhysicsWorld([piece, teammate], ball)
-        plan = plan_training_ball_flick(
+        plan = plan_piece_flick(
             piece.position,
             ball.position,
             piece_touches_used=2,
@@ -497,7 +499,7 @@ class TrainingBrainTests(unittest.TestCase):
             distance_between_mm(ball.position, teammate.position),
             PIECE_RADIUS_MM + BALL_RADIUS_MM + 25.0,
         )
-        return_plan = plan_training_ball_flick(
+        return_plan = plan_piece_flick(
             teammate.position,
             ball.position,
             teammates=[(piece.body_id, piece.position)],
@@ -505,7 +507,7 @@ class TrainingBrainTests(unittest.TestCase):
         self.assertIsNotNone(return_plan)
         self.assertEqual(return_plan.receiver_piece_id, piece.body_id)
 
-    def test_training_reaches_target_within_two_or_three_touches(self) -> None:
+    def test_reaches_target_within_two_or_three_touches(self) -> None:
         """A clear route uses the final allowed touch to cover the last gap."""
         for max_touches in (2, 3):
             with self.subTest(max_touches=max_touches):
@@ -531,11 +533,11 @@ class TrainingBrainTests(unittest.TestCase):
                 for touch_index in range(max_touches):
                     if target.contains(piece.position):
                         break
-                    waypoint = choose_training_waypoint(piece.position, target)
+                    waypoint = choose_waypoint(piece.position, target)
                     if waypoint is None:
                         self.fail("Expected a route to the target")
                     remaining_touches = max_touches - touch_index
-                    strength = training_flick_strength(
+                    strength = waypoint_flick_strength(
                         piece.position,
                         waypoint,
                         piece.friction_mm_s2,
@@ -544,7 +546,7 @@ class TrainingBrainTests(unittest.TestCase):
                     if touch_index == 0:
                         self.assertGreater(strength, 0.9)
                     if remaining_touches == 1:
-                        conservative_strength = training_flick_strength(
+                        conservative_strength = waypoint_flick_strength(
                             piece.position,
                             waypoint,
                             piece.friction_mm_s2,
@@ -565,7 +567,7 @@ class TrainingBrainTests(unittest.TestCase):
 
                 self.assertTrue(target.contains(piece.position))
 
-    def test_training_replans_after_each_physics_flick_stops(self) -> None:
+    def test_replans_after_each_physics_flick_stops(self) -> None:
         """The AI reaches the target through separate physical flicks."""
         world = _world(0.95)
         piece = world.pieces[0]
@@ -578,10 +580,10 @@ class TrainingBrainTests(unittest.TestCase):
         for _ in range(20):
             if target.contains(piece.position):
                 break
-            waypoint = choose_training_waypoint(piece.position, target, [obstacle])
+            waypoint = choose_waypoint(piece.position, target, [obstacle])
             if waypoint is None:
                 self.fail("Expected a route to the target")
-            strength = training_flick_strength(
+            strength = waypoint_flick_strength(
                 piece.position,
                 waypoint,
                 piece.friction_mm_s2,
@@ -597,6 +599,127 @@ class TrainingBrainTests(unittest.TestCase):
             self.assertFalse(obstacle.contains(piece.position, clearance=0.012))
 
         self.assertTrue(target.contains(piece.position))
+
+    def test_decreasing_x_attack_mirrors_the_increasing_x_plan(self) -> None:
+        """An away-direction team plans the mirror image of a home plan."""
+        pieces = [
+            ("p1", Vector2(0.55, 0.5), 2),
+            ("p2", Vector2(0.25, 0.25625), 0),
+            ("p3", Vector2(0.25, 0.74375), 0),
+        ]
+        ball = Vector2(0.59, 0.5)
+        obstacle = Obstacle(center=Vector2(0.7, 0.3), size=Vector2(0.05, 0.05))
+        home_plan = plan_team_flick(pieces, ball, [obstacle])
+        away_plan = plan_team_flick(
+            [
+                (piece_id, Vector2(1.0 - position.x, position.y), touches)
+                for piece_id, position, touches in pieces
+            ],
+            Vector2(1.0 - ball.x, ball.y),
+            [
+                Obstacle(
+                    center=Vector2(1.0 - obstacle.center.x, obstacle.center.y),
+                    size=obstacle.size,
+                )
+            ],
+            attack_direction=-1,
+        )
+
+        self.assertIsNotNone(home_plan)
+        self.assertIsNotNone(away_plan)
+        self.assertEqual(away_plan.action, home_plan.action)
+        self.assertEqual(away_plan.flicking_piece_id, home_plan.flicking_piece_id)
+        self.assertEqual(away_plan.receiver_piece_id, home_plan.receiver_piece_id)
+        self.assertAlmostEqual(away_plan.strength, home_plan.strength)
+        self.assertAlmostEqual(
+            away_plan.ball_target.x,
+            1.0 - home_plan.ball_target.x,
+        )
+        self.assertAlmostEqual(away_plan.ball_target.y, home_plan.ball_target.y)
+        self.assertAlmostEqual(
+            away_plan.piece_target.x,
+            1.0 - home_plan.piece_target.x,
+        )
+
+    def test_decreasing_x_attack_shoots_at_the_home_goal(self) -> None:
+        """An away-direction shot aims through the goal at X = 0."""
+        plan = plan_piece_flick(
+            Vector2(0.18, 0.5),
+            Vector2(0.15, 0.5),
+            attack_direction=-1,
+        )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.action, "shot")
+        self.assertAlmostEqual(plan.ball_target.x, -0.02)
+        self.assertAlmostEqual(plan.ball_target.y, 0.5)
+
+    def test_unsupported_attack_direction_is_rejected(self) -> None:
+        """Only the two pitch directions are valid planner inputs."""
+        with self.assertRaises(ValueError):
+            plan_team_flick(
+                [("p1", Vector2(0.5, 0.5), 0)],
+                Vector2(0.55, 0.5),
+                attack_direction=0,
+            )
+
+    def test_candidate_list_starts_with_the_planned_flick(self) -> None:
+        """The first candidate is the flick plan_team_flick would choose."""
+        pieces = [
+            ("p1", Vector2(0.5, 0.5), 0),
+            ("p2", Vector2(0.45, 0.62), 0),
+        ]
+        ball = Vector2(0.58, 0.5)
+
+        candidates = plan_team_flick_candidates(pieces, ball)
+
+        self.assertGreaterEqual(len(candidates), 1)
+        self.assertEqual(candidates[0], plan_team_flick(pieces, ball))
+
+    def test_sampled_candidates_aim_beside_the_ball_at_valid_strengths(self) -> None:
+        """Sampled flicks stay near the ball and within the strength range."""
+        ball = Vector2(0.5, 0.5)
+
+        candidates = sample_flick_candidates("p1", Vector2(0.45, 0.5), ball)
+
+        self.assertGreater(len(candidates), 5)
+        for candidate in candidates:
+            self.assertEqual(candidate.flicking_piece_id, "p1")
+            self.assertGreater(candidate.strength, 0.0)
+            self.assertLessEqual(candidate.strength, 1.0)
+            self.assertLessEqual(
+                distance_between_mm(candidate.piece_target, ball),
+                14.001,
+            )
+        self.assertEqual(
+            candidates,
+            sorted(candidates, key=lambda candidate: candidate.strength),
+        )
+
+    def test_sampled_candidates_are_empty_when_the_ball_is_out_of_range(self) -> None:
+        """A piece that cannot reach the ball proposes nothing."""
+        self.assertEqual(
+            sample_flick_candidates("p1", Vector2(0.0, 0.5), Vector2(0.9, 0.5)),
+            [],
+        )
+
+    def test_sampled_candidates_are_empty_when_an_obstacle_blocks_the_path(self) -> None:
+        """An obstacle between piece and ball removes every sampled flick."""
+        blocker = Obstacle(
+            center=Vector2(0.475, 0.5),
+            size=Vector2(0.02, 0.1),
+            padding=0.0,
+        )
+
+        self.assertEqual(
+            sample_flick_candidates(
+                "p1",
+                Vector2(0.45, 0.5),
+                Vector2(0.5, 0.5),
+                [blocker],
+            ),
+            [],
+        )
 
 
 def _segment_crosses_obstacle(

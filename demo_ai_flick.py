@@ -13,15 +13,13 @@ from sim_ai_flick import (
 )
 from sim_ai_brain import (
     Obstacle,
+    Scenario,
     TargetArea,
-    TrainingScenario,
-    choose_training_waypoint,
+    choose_waypoint,
     estimate_contact_strength,
-    training_flick_strength,
-    plan_training_team_ball_flick,
+    waypoint_flick_strength,
 )
 from sim_physics import (
-    AWAY,
     BALL_FRICTION_MM_S2,
     BALL_RADIUS_MM,
     HOME,
@@ -38,6 +36,7 @@ from sim_pitch import (
     PENALTY_AREA_WIDTH_MM,
     draw_pitch,
 )
+from sim_turns import TurnController, TurnEvent
 
 
 WINDOW_SIZE = (1280, 900)
@@ -76,6 +75,7 @@ DEFAULT_MAX_TRAINING_TOUCHES = 3
 MIN_TRAINING_TOUCHES = 1
 MAX_TRAINING_TOUCHES = 10
 TRAINING_FLICK_DELAY_SECONDS = 1.0
+DUMMY_NAVIGATION_PADDING = 0.015
 DEFAULT_AIM_MODE: AimMode = "marker"
 TRAINING_MODE = "training"
 FREE_PLAY_MODE = "free-play"
@@ -202,6 +202,74 @@ def _training_player_pieces(world: PhysicsWorld) -> list[Body]:
     ]
 
 
+def _new_turn_controller(world: PhysicsWorld) -> TurnController:
+    """Create the turn controller that plays the home team's attack."""
+    return TurnController(
+        world,
+        HOME,
+        flick_delay_seconds=TRAINING_FLICK_DELAY_SECONDS,
+    )
+
+
+def _dummy_obstacles(
+    dummy_pieces: list[DummyPiece],
+    padding: float = DUMMY_NAVIGATION_PADDING,
+) -> list[Obstacle]:
+    """Describe each moving dummy as an obstacle for the AI planner."""
+    return [
+        Obstacle(
+            center=dummy.center,
+            size=Vector2(
+                dummy.size_mm / PITCH_LENGTH_MM,
+                dummy.size_mm / PITCH_WIDTH_MM,
+            ),
+            padding=padding,
+        )
+        for dummy in dummy_pieces
+    ]
+
+
+def _flick_obstacles(
+    scenario: Scenario,
+    dummy_pieces: list[DummyPiece],
+) -> list[Obstacle]:
+    """Return the scenario and dummy obstacles used when planning flicks."""
+    return [*scenario.obstacles, *_dummy_obstacles(dummy_pieces, padding=0.0)]
+
+
+def _turn_event_message(event: TurnEvent, controller: TurnController) -> str:
+    """Describe a turn-controller event for the on-screen hint."""
+    if event.kind == "flick":
+        piece_number = TRAINING_PIECE_NUMBERS.get(event.piece_id or "", 0)
+        count = controller.touch_counts.get(event.piece_id or "", 0)
+        plan = event.plan
+        assert plan is not None
+        return (
+            f"Piece {piece_number}, flick {count}/3: {plan.action} "
+            f"({plan.strength * 100:.0f}%)"
+        )
+    if event.kind == "pass_received":
+        return "Pass received; teammate takes possession"
+    if event.kind == "goal":
+        return f"Goal scored in {controller.flicks_taken} flick(s)"
+    if event.kind == "possession_lost":
+        reasons = {
+            "missed_flick": "Missed the ball",
+            "opponent_contact": "Ball hit an opposing piece",
+            "possession_transfer": "No goal",
+        }
+        return (
+            f"{reasons.get(event.reason or '', 'No goal')}; "
+            "defending player has possession"
+        )
+    if event.kind == "no_plan":
+        return (
+            "No player piece has a safe ball route; "
+            "reposition a piece or obstacle"
+        )
+    return "Could not apply the planned flick"
+
+
 def _add_dummy_body(world: PhysicsWorld, dummy: DummyPiece, index: int) -> None:
     """Add a stationary collision body for a moving training dummy."""
     world.pieces.append(
@@ -305,7 +373,7 @@ def _draw_world(
 def _draw_training_objects(
     surface: pygame.Surface,
     field: pygame.Rect,
-    scenario: TrainingScenario,
+    scenario: Scenario,
     dummy_pieces: list[DummyPiece],
     show_target: bool = True,
 ) -> None:
@@ -1059,7 +1127,7 @@ def _draw_training_touch_controls(
 
 def _training_object_at(
     field: pygame.Rect,
-    scenario: TrainingScenario,
+    scenario: Scenario,
     dummy_pieces: list[DummyPiece],
     player_positions: list[Vector2],
     ball_position: Vector2,
@@ -1139,7 +1207,7 @@ def _move_training_ball(
 
 def _move_training_object(
     field: pygame.Rect,
-    scenario: TrainingScenario,
+    scenario: Scenario,
     dummy_pieces: list[DummyPiece],
     piece_position: Vector2,
     object_ref: tuple[str, int, str | None],
@@ -1225,7 +1293,7 @@ def _move_training_object(
 def _move_training_selection(
     field: pygame.Rect,
     world: PhysicsWorld,
-    scenario: TrainingScenario,
+    scenario: Scenario,
     dummy_pieces: list[DummyPiece],
     object_ref: tuple[str, int, str | None],
     mouse_position: tuple[int, int],
@@ -1282,22 +1350,16 @@ def main() -> None:
     running = True
     mode = MENU_MODE
     selected_action: str | None = None
-    training_scenario = TrainingScenario()
+    training_scenario = Scenario()
     dummy_pieces: list[DummyPiece] = []
     training_started = False
     max_training_touches = DEFAULT_MAX_TRAINING_TOUCHES
     ball_enabled = False
     training_touches_used = 0
     active_piece_id = "ai-piece"
-    piece_touch_counts = {"ai-piece": 0}
+    controller = _new_turn_controller(world)
     training_flick_in_progress = False
     training_delay_remaining = 0.0
-    pending_flick_piece_id: str | None = None
-    pending_flick_contacted = False
-    pending_pass_receiver_id: str | None = None
-    pending_pass_ball_start: Vector2 | None = None
-    pending_pass_received = False
-    pending_touch_reset_piece_id: str | None = None
     dragged_training_object: tuple[str, int, str | None] | None = None
 
     while running:
@@ -1333,13 +1395,10 @@ def main() -> None:
                     elif menu_rects["training"].collidepoint(event.pos):
                         mode = TRAINING_MODE
                         world = _create_training_world(ball_enabled)
-                        training_scenario = TrainingScenario()
+                        controller = _new_turn_controller(world)
+                        training_scenario = Scenario()
                         dummy_pieces = []
                         training_started = False
-                        piece_touch_counts = {
-                            piece.body_id: 0
-                            for piece in _training_player_pieces(world)
-                        }
                         selected_action = None
                         hint_message = "Add shapes, drag them into place, then Start"
                     continue
@@ -1373,21 +1432,12 @@ def main() -> None:
                             piece.position = old_position
                         for index, dummy in enumerate(dummy_pieces):
                             _add_dummy_body(world, dummy, index)
+                        controller = _new_turn_controller(world)
                         training_started = False
                         training_touches_used = 0
                         active_piece_id = "ai-piece"
-                        piece_touch_counts = {
-                            piece.body_id: 0
-                            for piece in _training_player_pieces(world)
-                        }
                         training_flick_in_progress = False
                         training_delay_remaining = 0.0
-                        pending_flick_piece_id = None
-                        pending_flick_contacted = False
-                        pending_pass_receiver_id = None
-                        pending_pass_ball_start = None
-                        pending_pass_received = False
-                        pending_touch_reset_piece_id = None
                         selected_action = None
                         dragged_training_object = None
                         hint_message = (
@@ -1407,18 +1457,9 @@ def main() -> None:
                             if not training_started:
                                 training_touches_used = 0
                                 active_piece_id = "ai-piece"
-                                piece_touch_counts = {
-                                    player.body_id: 0
-                                    for player in _training_player_pieces(world)
-                                }
+                                controller.reset(HOME)
                                 training_flick_in_progress = False
                                 training_delay_remaining = 0.0
-                                pending_flick_piece_id = None
-                                pending_flick_contacted = False
-                                pending_pass_receiver_id = None
-                                pending_pass_ball_start = None
-                                pending_pass_received = False
-                                pending_touch_reset_piece_id = None
                             training_started = True
                             selected_action = None
                             hint_message = (
@@ -1428,26 +1469,17 @@ def main() -> None:
                             )
                         continue
                     if training_rects["reset"].collidepoint(event.pos):
-                        training_scenario = TrainingScenario()
+                        training_scenario = Scenario()
                         dummy_pieces = []
                         world = _create_training_world(ball_enabled)
+                        controller = _new_turn_controller(world)
                         training_started = False
                         selected_action = None
                         dragged_training_object = None
                         training_touches_used = 0
                         active_piece_id = "ai-piece"
-                        piece_touch_counts = {
-                            piece.body_id: 0
-                            for piece in _training_player_pieces(world)
-                        }
                         training_flick_in_progress = False
                         training_delay_remaining = 0.0
-                        pending_flick_piece_id = None
-                        pending_flick_contacted = False
-                        pending_pass_receiver_id = None
-                        pending_pass_ball_start = None
-                        pending_pass_received = False
-                        pending_touch_reset_piece_id = None
                         hint_message = "Scenario cleared"
                         continue
 
@@ -1721,103 +1753,39 @@ def main() -> None:
             )
             if training_started:
                 _update_dummy_bodies(world, dummy_pieces, elapsed)
-                world.step(elapsed)
-                if (
-                    pending_flick_piece_id is not None
-                    and pending_flick_piece_id in world.last_ball_contacts
-                ):
-                    pending_flick_contacted = True
-                    if pending_touch_reset_piece_id is not None:
-                        piece_touch_counts[pending_touch_reset_piece_id] = 0
-                        pending_touch_reset_piece_id = None
-                if (
-                    pending_flick_piece_id is not None
-                    and pending_pass_ball_start is not None
-                    and distance_between_mm(
-                        world.ball.position,
-                        pending_pass_ball_start,
-                    ) > 3.0
-                ):
-                    teammates_contacted = [
-                        player
-                        for player in player_pieces
-                        if player.body_id != pending_flick_piece_id
-                        and player.body_id in world.last_ball_contacts
-                    ]
-                    if teammates_contacted:
-                        pending_pass_receiver_id = teammates_contacted[0].body_id
-                        pending_pass_received = True
-                all_player_pieces_stopped = all(
-                    player.velocity.length == 0.0
-                    for player in player_pieces
-                )
-                completed_flick_piece_id: str | None = None
-                if (
-                    pending_flick_piece_id is not None
-                    and all_player_pieces_stopped
-                    and world.ball.velocity.length == 0.0
-                ):
-                    completed_flick_piece_id = pending_flick_piece_id
-                    if not pending_flick_contacted:
-                        world.possession = AWAY
-                    pending_flick_piece_id = None
-                    pending_flick_contacted = False
-                if (
-                    ball_enabled
-                    and world.last_goal is not None
-                    and world.last_goal.scoring_team == HOME
-                ):
-                    hint_message = (
-                        f"Goal scored in {training_touches_used} flick(s)"
+                if ball_enabled:
+                    turn_events = controller.update(
+                        elapsed,
+                        _flick_obstacles(training_scenario, dummy_pieces),
                     )
-                    training_started = False
-                elif (
-                    ball_enabled
-                    and world.possession is not None
-                    and world.possession != HOME
-                ):
-                    hint_message = (
-                        "No goal; defending player has possession "
-                        "(goal kick restart pending)"
-                    )
-                    training_started = False
-                else:
-                    if (
-                        pending_pass_received
-                        and all_player_pieces_stopped
-                        and (not ball_enabled or world.ball.velocity.length == 0.0)
-                    ):
-                        receiver_id = pending_pass_receiver_id
-                        if receiver_id is not None:
-                            if completed_flick_piece_id is not None:
-                                piece_touch_counts[completed_flick_piece_id] = 0
-                            active_piece_id = receiver_id
-                        pending_pass_receiver_id = None
-                        pending_pass_ball_start = None
-                        pending_pass_received = False
-                        piece = next(
-                            player
-                            for player in player_pieces
-                            if player.body_id == active_piece_id
+                    active_piece_id = controller.active_piece_id or active_piece_id
+                    for turn_event in turn_events:
+                        hint_message = _turn_event_message(
+                            turn_event,
+                            controller,
                         )
-                        hint_message = "Pass received; teammate takes possession"
-                    if (
-                        all_player_pieces_stopped
-                        and (not ball_enabled or world.ball.velocity.length == 0.0)
-                    ):
+                    if not turn_events and controller.delay_remaining > 0.0:
+                        hint_message = (
+                            f"Next flick in {controller.delay_remaining:.1f}s"
+                        )
+                    if controller.finished:
+                        training_started = False
+                else:
+                    world.step(elapsed)
+                    all_player_pieces_stopped = all(
+                        player.velocity.length == 0.0
+                        for player in player_pieces
+                    )
+                    if all_player_pieces_stopped:
                         if (
-                            not ball_enabled
-                            and training_scenario.target is not None
+                            training_scenario.target is not None
                             and training_scenario.target.contains(piece.position)
                         ):
                             hint_message = (
                                 f"Target reached in {training_touches_used} touch(es)"
                             )
                             training_started = False
-                        elif (
-                            not ball_enabled
-                            and training_touches_used >= max_training_touches
-                        ):
+                        elif training_touches_used >= max_training_touches:
                             hint_message = (
                                 f"Touch limit reached ({max_training_touches}); "
                                 "target not reached"
@@ -1845,168 +1813,46 @@ def main() -> None:
                                     launch_next_flick = True
 
                             if launch_next_flick:
-                                if ball_enabled:
-                                    flick_obstacles = [
+                                waypoint = choose_waypoint(
+                                    piece.position,
+                                    training_scenario.target,
+                                    [
                                         *training_scenario.obstacles,
-                                        *[
-                                            Obstacle(
-                                                center=dummy.center,
-                                                size=Vector2(
-                                                    dummy.size_mm / PITCH_LENGTH_MM,
-                                                    dummy.size_mm / PITCH_WIDTH_MM,
-                                                ),
-                                                padding=0.0,
-                                            )
-                                            for dummy in dummy_pieces
-                                        ],
-                                    ]
-                                    flick_plan = plan_training_team_ball_flick(
-                                        [
-                                            (
-                                                player.body_id,
-                                                player.position,
-                                                piece_touch_counts.get(
-                                                    player.body_id,
-                                                    0,
-                                                ),
-                                            )
-                                            for player in player_pieces
-                                        ],
-                                        world.ball.position,
-                                        flick_obstacles,
+                                        *_dummy_obstacles(dummy_pieces),
+                                    ],
+                                )
+                                if waypoint is None:
+                                    hint_message = (
+                                        "No clear route; move or remove an obstacle"
                                     )
-                                    if flick_plan is None:
+                                else:
+                                    flick_strength = waypoint_flick_strength(
+                                        piece.position,
+                                        waypoint,
+                                        piece.friction_mm_s2,
+                                        touches_remaining=(
+                                            max_training_touches
+                                            - training_touches_used
+                                        ),
+                                    )
+                                    if flick_toward_target(
+                                        world,
+                                        active_piece_id,
+                                        waypoint,
+                                        flick_strength,
+                                    ):
+                                        training_touches_used += 1
+                                        training_flick_in_progress = True
                                         hint_message = (
-                                            "No player piece has a safe ball route; "
-                                            "reposition a piece or obstacle"
+                                            f"Touch {training_touches_used}/"
+                                            f"{max_training_touches}: "
+                                            f"flicking ({flick_strength * 100:.0f}%)"
+                                        )
+                                    else:
+                                        hint_message = (
+                                            "Could not apply the planned flick"
                                         )
                                         training_started = False
-                                    else:
-                                        flicking_piece = next(
-                                            (
-                                                player
-                                                for player in player_pieces
-                                                if player.body_id
-                                                == flick_plan.flicking_piece_id
-                                            ),
-                                            None,
-                                        )
-                                        if flicking_piece is None:
-                                            raise RuntimeError(
-                                                "Team flick plan references an "
-                                                "unknown player piece"
-                                            )
-                                        previous_piece_id = active_piece_id
-                                        if (
-                                            previous_piece_id
-                                            != flicking_piece.body_id
-                                        ):
-                                            pending_touch_reset_piece_id = (
-                                                previous_piece_id
-                                            )
-                                        active_piece_id = flicking_piece.body_id
-                                        piece = flicking_piece
-                                        flick_applied = flick_toward_target(
-                                            world,
-                                            flicking_piece.body_id,
-                                            flick_plan.piece_target,
-                                            flick_plan.strength,
-                                        )
-                                        if flick_applied:
-                                            training_touches_used += 1
-                                            piece_touch_counts[
-                                                flicking_piece.body_id
-                                            ] = piece_touch_counts.get(
-                                                flicking_piece.body_id,
-                                                0,
-                                            ) + 1
-                                            training_flick_in_progress = True
-                                            pending_flick_piece_id = (
-                                                flicking_piece.body_id
-                                            )
-                                            pending_flick_contacted = (
-                                                distance_between_mm(
-                                                    flicking_piece.position,
-                                                    world.ball.position,
-                                                )
-                                                <= flicking_piece.radius_mm
-                                                + world.ball.radius_mm
-                                                + 1.0
-                                            )
-                                            pending_pass_receiver_id = (
-                                                flick_plan.receiver_piece_id
-                                            )
-                                            pending_pass_ball_start = (
-                                                world.ball.position
-                                            )
-                                            pending_pass_received = False
-                                            active_index = player_pieces.index(
-                                                flicking_piece
-                                            )
-                                            hint_message = (
-                                                f"Piece {active_index + 1}, flick "
-                                                f"{piece_touch_counts[flicking_piece.body_id]}"
-                                                f"/3: {flick_plan.action} "
-                                                f"({flick_plan.strength * 100:.0f}%)"
-                                            )
-                                        else:
-                                            pending_touch_reset_piece_id = None
-                                            hint_message = (
-                                                "Could not apply the planned flick"
-                                            )
-                                            training_started = False
-                                else:
-                                    dummy_obstacles = [
-                                        Obstacle(
-                                            center=dummy.center,
-                                            size=Vector2(
-                                                dummy.size_mm / PITCH_LENGTH_MM,
-                                                dummy.size_mm / PITCH_WIDTH_MM,
-                                            ),
-                                        )
-                                        for dummy in dummy_pieces
-                                    ]
-                                    obstacles = [
-                                        *training_scenario.obstacles,
-                                        *dummy_obstacles,
-                                    ]
-                                    waypoint = choose_training_waypoint(
-                                        piece.position,
-                                        training_scenario.target,
-                                        obstacles,
-                                    )
-                                    if waypoint is None:
-                                        hint_message = (
-                                            "No clear route; move or remove an obstacle"
-                                        )
-                                    else:
-                                        flick_strength = training_flick_strength(
-                                            piece.position,
-                                            waypoint,
-                                            piece.friction_mm_s2,
-                                            touches_remaining=(
-                                                max_training_touches
-                                                - training_touches_used
-                                            ),
-                                        )
-                                        if flick_toward_target(
-                                            world,
-                                            active_piece_id,
-                                            waypoint,
-                                            flick_strength,
-                                        ):
-                                            training_touches_used += 1
-                                            training_flick_in_progress = True
-                                            hint_message = (
-                                                f"Touch {training_touches_used}/"
-                                                f"{max_training_touches}: "
-                                                f"flicking ({flick_strength * 100:.0f}%)"
-                                            )
-                                        else:
-                                            hint_message = (
-                                                "Could not apply the planned flick"
-                                            )
-                                            training_started = False
             elif any(player.velocity.length > 0.0 for player in player_pieces):
                 world.step(elapsed)
 
@@ -2053,7 +1899,7 @@ def main() -> None:
                 hint_message,
                 enabled=not training_started,
                 ball_enabled=ball_enabled,
-                piece_touches_used=piece_touch_counts.get(active_piece_id, 0),
+                piece_touches_used=controller.touch_counts.get(active_piece_id, 0),
             )
             _draw_coordinates(screen, field, world, ball_enabled)
         pygame.display.flip()

@@ -1,8 +1,8 @@
 # Subbuteo Simulator Rules and Technical Reference
 
-This is the project's self-contained, canonical rules reference. Unspecified
-implementation details are listed under [Items to confirm](#items-to-confirm)
-rather than silently resolved.
+This is the project's self-contained, canonical rules reference. It states
+decided rules and the current implementation status. Open questions are kept
+in [AI_QUERIES.md](AI_QUERIES.md), not here.
 
 # Subbuteo game
 
@@ -80,8 +80,8 @@ profile dimensions or spin parameters are defined.
 
 For collision calculations, model the ball and field player pieces as circles
 using their specified radii. Model the goalkeeper with a rectangular footprint,
-not a circle. Its physical pitch-length thickness remains unresolved; do not
-assume that the 8 mm rendering thickness is its collision thickness.
+not a circle. Do not assume that the 8 mm rendering thickness is its collision
+thickness.
 
 ### Coordinates
 
@@ -163,7 +163,7 @@ information over the pitch:
 - **Integration:** Keep score-bug drawing in the reusable `sim_scorebug.py`
   module, separate from match rules and state. The match view should render
   the pitch first, then call this module with scores, team names and colors,
-  and remaining match time from match state. Keep `scorebug_demo.py` as a
+  and remaining match time from match state. Keep `demo_scorebug.py` as a
   standalone visual preview, not the match implementation.
 
 ### Match setup piece rendering standard
@@ -220,17 +220,15 @@ or gameplay rules.
 - **Goal net:** After a valid goal crosses the goal line through the goal
   mouth, the inside sides and back of the net should rebound the ball with
   stronger damping than the pitch perimeter (a lower coefficient of
-  restitution than `0.65`). Choose the exact net coefficient when implementing
-  the physics. These post-goal rebounds do not undo the goal.
+  restitution than `0.65`). The implemented net coefficient is `0.3`. These
+  post-goal rebounds do not undo the goal.
 - Traditional throw-ins, corner-flicks, and free-flicks
   are removed.
 
 ## Formations and team setup
 
 Formations are scalable normalized-coordinate templates used for kick-offs
-and tactical resets. Positions below are the source's approximate X
-line-positions; except where stated, it does not specify complete Y
-coordinates or exact spacing for each lineup.
+and tactical resets. Positions below are approximate X line-positions.
 
 ### Defensive line templates
 
@@ -263,8 +261,7 @@ The following are field-figure counts; each team also has one goalkeeper.
 | 5-a-side | 3-0-1 (park the bus) | 3 defenders `0.16`, 1 forward `0.48` |
 
 Use the active formation template for kick-off placement and possession
-resets. Where a template does not specify Y positions or spacing, those
-placements still need to be defined by the project.
+resets.
 
 ## Turn-taking and possession
 
@@ -315,6 +312,8 @@ placements still need to be defined by the project.
   ball or an attacking figure. An illegal block-flick is invalidated, play
   returns to the attacking player, and all attacking field-piece touch
   counters reset to zero.
+- A legal block-flicked piece stays where its block-flick leaves it for
+  subsequent play.
 
 ### Fouls
 
@@ -452,19 +451,61 @@ rebound vectors and the wall restitution value.
 For a future physics refinement, resolve competing collision events in order
 of time of contact rather than by arbitrary processing order.
 
-## Items to confirm
+## Implementation status
 
-- **Goalkeeper collision thickness:** The goalkeeper collision shape is
-  rectangular, but its physical thickness remains undecided between the 6 mm
-  reference and the 8 mm rendering compromise.
-- **Collision event ties:** Define a tie-break rule for events with the same
-  time of contact when implementing time-ordered collision handling.
-- **Clear paths and bank shots:** Define how shot and pass paths account for
-  piece footprints and rebounds, and how the attacker selects bank shots.
-- **Setup-pass geometry:** Define any minimum movement or angle that
-  distinguishes a setup pass from an ordinary short pass.
-- **Block-flick persistence:** Confirm whether a defending piece remains in
-  its new position after a block-flick.
-- **Formation placement:** The source gives role line positions but not all
-  Y-coordinates or spacing for the scalable lineup templates. Complete these
-  when the pitch and player positions are defined in more detail.
+This section records what the code does today, so that rules above are not
+mistaken for implemented behavior. See [MODULES.md](MODULES.md) for the module
+guide. Core modules are named for their responsibility, not for a mode: the
+training demo and the future full match both use the same physics, planner and
+turn controller.
+
+### Implemented
+
+- **Physics:** Headless circle physics for pieces and the ball, wall and net
+  rebounds, goal-line possession transfers, shooting-area goal eligibility
+  (judged from the ball center when the flick begins), and own goals.
+- **Attack direction:** The home team attacks toward increasing X and the away
+  team toward decreasing X. The planner accepts an attack direction and mirrors
+  its calculations, so both teams get identical plans for mirrored positions.
+- **Attacking AI:** Per-team planning of shots, short advances, direct passes,
+  and third-touch setup passes, with the three-consecutive-touch limit,
+  approach paths that avoid teammates and obstacles, and the shot > setup >
+  possession priority order.
+- **Simulation-verified flicks:** Before a flick is used, it is simulated on a
+  copy of the world through the normal physics. Flicks that miss the ball,
+  strike another piece before the ball, touch an opposing piece or lose
+  possession are rejected. If no planner candidate survives, exploratory
+  flicks around the ball are simulated, which allows sideways and backward
+  moves when they leave the ball near a teammate or in the shooting area.
+- **Turn controller:** Touch counts, touch resets on a pass to a teammate, goal
+  detection, and possession loss when a flick misses the ball, the ball
+  contacts an opposing piece, or play settles with possession transferred. It
+  can end the sequence on a loss (training) or hand the attack to the other
+  team (match). It records how long each decision took and whether it used a
+  planner candidate or a sampled fallback.
+- **Scenario harness:** Seeded random attacking scenarios run headlessly to
+  report goal rate, flicks per goal, outcome counts, decision statistics and
+  reproducible failing seeds. Reference result, 100 seeds with three pieces:
+  74% goal rate with verification, against 23% without it.
+- **Rendering:** Pitch, score bug, timer, start menu, and piece rendering.
+
+### Not yet implemented
+
+- **Defending:** Defender planning, the 0.10-second response window, block-flick
+  validation, and the illegal block-flick reset. The block-flick is to be a
+  capped-strength flick resolved to rest and then checked for legality.
+- **Fouls in play:** Illegal contact, teammate contact before the ball, and
+  smashing are not applied as rulings during a match. The verifier only uses
+  the first two to reject an attacker's own candidate flicks. Smashing is not
+  detected at all, and the three-touch limit is enforced by the planner.
+- **Goalkeeper behavior, spin and curl, time-of-contact collision ordering.**
+- **Clear-lane and bank-shot logic:** The geometric planner assumes straight
+  ball paths. Simulation now checks the real result, including wall rebounds,
+  but the planner does not deliberately propose bank shots and does not
+  account for moving defenders.
+- **Match flow:** Kick-off, halves, the match clock, formations, and restarts.
+  The demo shows only an attacking sequence.
+- **No-move fallback:** Sampled flicks now cover many cases the planner misses,
+  but a sequence still ends with a `no_plan` outcome when neither the planner
+  nor the sampler finds a safe flick (about 18% of the reference scenarios).
+  Some other runs wander until the 30-flick limit.

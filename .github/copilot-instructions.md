@@ -3,10 +3,47 @@
 ## Mandatory Project Context
 - At the start of the session before answering a project-specific question or planning, reviewing, or changing project files, read [SUBBUTEO_SIM_RULES.md](../SUBBUTEO_SIM_RULES.md). Do not rely on remembered or summarized rules when the canonical document is available.
 - Explicitly confirm in your first response that you have read the rules. If the file cannot be accessed, say so and do not claim to have read it.
+- Also read [AI_NOTES.md](../AI_NOTES.md) and [AI_QUERIES.md](../AI_QUERIES.md) at the start of every session, as set out under "Starting a session".
 
 ## Documentation and Code Changes
 - Do not create or modify documentation unless the user explicitly instructs you to. This includes [SUBBUTEO_SIM_RULES.md](../SUBBUTEO_SIM_RULES.md), README files, and other documentation or specification files.
+- The only exceptions are [AI_QUERIES.md](../AI_QUERIES.md) and [AI_NOTES.md](../AI_NOTES.md), which you maintain as described in "Open queries" and "Project plan and notes" below. If other documentation falls out of date, tell the user instead of editing it.
 - This restriction does not prevent code changes: when implementing a requested coding task, create or modify the necessary source, test, configuration, or other implementation files. Do not update documentation as a side effect unless explicitly asked.
+
+## Open queries
+- Record every open question or decision that needs the user's input in [AI_QUERIES.md](../AI_QUERIES.md), not in the rules document, in code comments, or only in chat. [SUBBUTEO_SIM_RULES.md](../SUBBUTEO_SIM_RULES.md) holds decided rules and implementation status only.
+- Follow the format already used in that file: the next free `Q` number, a heading, a plain-language question with units where relevant, a suggested default when you have one, and a `**Your response: TBD**` line for the user to fill in. Add the new item to the status table at the top.
+- Never edit or overwrite a response the user has written. When the user answers a question, treat the answer as decided: record it in [AI_NOTES.md](../AI_NOTES.md), and tell the user if the rules document should change so they can instruct you to update it.
+- Still ask the user in the session when a decision blocks the current task, and also add it to [AI_QUERIES.md](../AI_QUERIES.md) so it is not lost.
+
+## Project plan and notes
+- Maintain [AI_NOTES.md](../AI_NOTES.md) during every session. It holds the handover for the next session: the next task, current status and baselines, decisions the user has made, the planned work, and known issues.
+- Update it as work progresses, not only at the end: when a plan step is finished, started or changed, when the user makes a decision, when you learn something that affects the plan, and when baseline figures (test count, harness results) change.
+- Keep its question list consistent with [AI_QUERIES.md](../AI_QUERIES.md); do not keep a second, different list.
+
+## Starting a session
+This is the only place the start-of-session procedure is written.
+
+Every session, before any project-specific work:
+- Read [SUBBUTEO_SIM_RULES.md](../SUBBUTEO_SIM_RULES.md), [AI_NOTES.md](../AI_NOTES.md) and [AI_QUERIES.md](../AI_QUERIES.md). If a file cannot be accessed, say so and do not claim to have read it.
+- Treat an answer the user has recorded in [AI_QUERIES.md](../AI_QUERIES.md) as decided, even if [AI_NOTES.md](../AI_NOTES.md) has not caught up yet.
+- In your first response, confirm which files you read and mention any questions the user has answered since [AI_NOTES.md](../AI_NOTES.md) was last updated.
+
+When the user's message is "HELLO THERE" (any capitalisation), also do the following, in order:
+1. Run the full test suite and the scenario harness using the commands in the "Next task" section of [AI_NOTES.md](../AI_NOTES.md), and say whether the results match the baselines recorded there.
+2. Summarise where the project stands in a few lines.
+3. Plan out the task described in "Next task". Respect its stopping points; in particular, wait for the user's approval before implementing when it says to.
+4. If the user adds text after the phrase, follow that text in preference to the task, and say so.
+5. If "Next task" is missing or unclear, say so and ask the user what to do next instead of guessing.
+
+## Ending a session
+When the user says "EXECUTE ORDER 66" or a clear equivalent, do a final review of [AI_NOTES.md](../AI_NOTES.md) before replying:
+- If code changed during the session, run the full test suite and the scenario harness and update the recorded baselines.
+- Rewrite "Next task" so the next session can start from it with no other context: the task, the commands, and the current baselines.
+- Bring the plan, the user's decisions, the known issues and the open-questions table up to date, and make them agree with [AI_QUERIES.md](../AI_QUERIES.md).
+- Note any other documentation (rules, module guide) that is now out of date, without editing it unless the user asks.
+
+Then give a short summary of what changed this session and what the next session will do. Do not commit or push.
 
 ## Documentation standards
 

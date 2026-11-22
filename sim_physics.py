@@ -1,6 +1,6 @@
 """Headless physics for flicking Subbuteo pieces and the ball."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import ceil, hypot
 
 
@@ -25,7 +25,47 @@ FIXED_STEP_S = 1.0 / 120.0
 
 HOME = "home"
 AWAY = "away"
+ATTACK_TOWARD_INCREASING_X = 1
+ATTACK_TOWARD_DECREASING_X = -1
 
+
+def opposing_team(team: str) -> str:
+    """Return the team opposing the given team.
+
+    Args:
+        team: ``HOME`` or ``AWAY``.
+
+    Returns:
+        str: The other team identifier.
+
+    Raises:
+        ValueError: If the team identifier is not recognised.
+    """
+    if team == HOME:
+        return AWAY
+    if team == AWAY:
+        return HOME
+    raise ValueError(f"Unknown team: {team}")
+
+
+def attack_direction(team: str) -> int:
+    """Return the X direction in which a team attacks.
+
+    Args:
+        team: ``HOME`` or ``AWAY``.
+
+    Returns:
+        int: ``ATTACK_TOWARD_INCREASING_X`` for the home team and
+            ``ATTACK_TOWARD_DECREASING_X`` for the away team.
+
+    Raises:
+        ValueError: If the team identifier is not recognised.
+    """
+    if team == HOME:
+        return ATTACK_TOWARD_INCREASING_X
+    if team == AWAY:
+        return ATTACK_TOWARD_DECREASING_X
+    raise ValueError(f"Unknown team: {team}")
 
 @dataclass(frozen=True)
 class Vector2:
@@ -120,6 +160,7 @@ class PhysicsWorld:
         self.ball_in_net: str | None = None
         self.last_flick_team: str | None = None
         self.last_ball_contacts: set[str] = set()
+        self.last_piece_contacts: set[frozenset[str]] = set()
         self._shot_start_x: float | None = None
 
     @classmethod
@@ -181,6 +222,31 @@ class PhysicsWorld:
         )
         return cls(pieces, ball)
 
+    def clone(self) -> "PhysicsWorld":
+        """Create an independent copy of the world for what-if simulation.
+
+        Bodies are copied, so stepping or flicking the clone never changes this
+        world. ``Vector2`` is immutable and is shared safely.
+
+        Returns:
+            PhysicsWorld: A world with the same bodies, scores, possession,
+                net state, last-contact record and shot-start state.
+        """
+        clone = PhysicsWorld.__new__(PhysicsWorld)
+        clone.pieces = [replace(piece) for piece in self.pieces]
+        clone._starting_piece_positions = dict(self._starting_piece_positions)
+        clone.ball = replace(self.ball)
+        clone.possession = self.possession
+        clone.home_score = self.home_score
+        clone.away_score = self.away_score
+        clone.last_goal = self.last_goal
+        clone.ball_in_net = self.ball_in_net
+        clone.last_flick_team = self.last_flick_team
+        clone.last_ball_contacts = set(self.last_ball_contacts)
+        clone.last_piece_contacts = set(self.last_piece_contacts)
+        clone._shot_start_x = self._shot_start_x
+        return clone
+
     def flick(self, piece_id: str, pull_mm: Vector2) -> bool:
         """Apply a drag-and-release flick to one field piece.
 
@@ -232,6 +298,7 @@ class PhysicsWorld:
         """
         self.last_goal = None
         self.last_ball_contacts.clear()
+        self.last_piece_contacts.clear()
         if elapsed_seconds <= 0:
             return
 
@@ -275,7 +342,10 @@ class PhysicsWorld:
 
         for index, first in enumerate(self.pieces):
             for second in self.pieces[index + 1 :]:
-                self._resolve_collision(first, second)
+                if self._resolve_collision(first, second):
+                    self.last_piece_contacts.add(
+                        frozenset((first.body_id, second.body_id))
+                    )
             if (
                 first.position_mm - self.ball.position_mm
             ).length < first.radius_mm + self.ball.radius_mm:
@@ -295,15 +365,19 @@ class PhysicsWorld:
         return velocity * ((speed - drop) / speed)
 
     @staticmethod
-    def _resolve_collision(first: Body, second: Body) -> None:
-        """Separate overlapping circles and apply a restitution impulse."""
+    def _resolve_collision(first: Body, second: Body) -> bool:
+        """Separate overlapping circles and apply a restitution impulse.
+
+        Returns:
+            bool: Whether the two bodies were overlapping.
+        """
         first_position = first.position_mm
         second_position = second.position_mm
         offset = first_position - second_position
         distance = offset.length
         minimum_distance = first.radius_mm + second.radius_mm
         if distance >= minimum_distance:
-            return
+            return False
 
         normal = offset.normalized()
         if distance == 0:
@@ -312,7 +386,7 @@ class PhysicsWorld:
         inverse_second = 1.0 / second.mass if second.movable else 0.0
         inverse_total = inverse_first + inverse_second
         if inverse_total == 0:
-            return
+            return True
 
         overlap = minimum_distance - distance
         first_position = first_position + normal * (
@@ -333,7 +407,7 @@ class PhysicsWorld:
         relative_velocity = first.velocity - second.velocity
         speed_along_normal = relative_velocity.dot(normal)
         if speed_along_normal >= 0:
-            return
+            return True
 
         restitution = PIECE_RESTITUTION
         impulse = -(1.0 + restitution) * speed_along_normal / inverse_total
@@ -342,6 +416,7 @@ class PhysicsWorld:
             first.velocity = first.velocity + impulse_vector * inverse_first
         if second.movable:
             second.velocity = second.velocity - impulse_vector * inverse_second
+        return True
 
     @staticmethod
     def _reflect_velocity(body: Body, axis: str, restitution: float) -> None:
