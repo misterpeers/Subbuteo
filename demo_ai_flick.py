@@ -75,6 +75,9 @@ DEFAULT_MAX_TRAINING_TOUCHES = 3
 MIN_TRAINING_TOUCHES = 1
 MAX_TRAINING_TOUCHES = 10
 TRAINING_FLICK_DELAY_SECONDS = 1.0
+# Longest simulated time per frame, so a slow AI decision pauses the picture
+# instead of making pieces jump.
+MAX_FRAME_SECONDS = 1.0 / 30.0
 DUMMY_NAVIGATION_PADDING = 0.015
 DEFAULT_AIM_MODE: AimMode = "marker"
 TRAINING_MODE = "training"
@@ -1363,7 +1366,7 @@ def main() -> None:
     dragged_training_object: tuple[str, int, str | None] | None = None
 
     while running:
-        elapsed = clock.tick(60) / 1000.0
+        elapsed = min(clock.tick(60) / 1000.0, MAX_FRAME_SECONDS)
         mouse_position = pygame.mouse.get_pos()
         for event in pygame.event.get():
             if event.type == pygame.QUIT:

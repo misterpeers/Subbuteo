@@ -229,6 +229,24 @@ class TurnControllerTests(unittest.TestCase):
         self.assertEqual(controller.outcome.kind, "no_plan")
         self.assertEqual(controller.decision_stats.none, 1)
 
+    def test_ball_stops_record_each_decision_and_clear_on_reset(self) -> None:
+        """The controller remembers where the ball stood before each flick."""
+        setup = random_setup(0)
+        controller = TurnController(
+            build_world(setup),
+            setup.team,
+            flick_delay_seconds=0.0,
+        )
+        for _ in range(MAX_UPDATES):
+            controller.update(STEP_SECONDS)
+            if controller.flicks_taken >= 2 or controller.finished:
+                break
+
+        self.assertGreaterEqual(len(controller.ball_stops), 2)
+        self.assertEqual(controller.ball_stops[0], setup.ball_position)
+        controller.reset()
+        self.assertEqual(controller.ball_stops, [])
+
     def test_unknown_team_is_rejected(self) -> None:
         """A controller can only be created for a known team."""
         world = _world([], Vector2(0.5, 0.5))

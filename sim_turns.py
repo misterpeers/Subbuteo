@@ -111,7 +111,9 @@ class TurnController:
 
     The controller is independent of Pygame and of any scenario editor. It
     plans each flick with the shared AI planner, applies it through the shared
-    physics engine, and decides when the attack has ended.
+    physics engine, and decides when the attack has ended. It records where
+    the ball stood before each flick of the current attack in ``ball_stops``,
+    so the planner can avoid returning the ball to the same place in a loop.
     """
 
     def __init__(
@@ -202,6 +204,7 @@ class TurnController:
         self._pending_pass_received_by: str | None = None
         self._pending_touch_reset_piece_id: str | None = None
         self._opponent_contact = False
+        self.ball_stops: list[Vector2] = []
 
     def update(
         self,
@@ -351,12 +354,14 @@ class TurnController:
         attackers = self.attacking_pieces()
         started = perf_counter()
         source = "planned"
+        self.ball_stops.append(self.world.ball.position)
         if self.verify_flicks:
             verified = plan_verified_team_flick(
                 self.world,
                 self.attacking_team,
                 self.touch_counts,
                 obstacles,
+                visited_ball_positions=self.ball_stops,
             )
             plan = verified.plan if verified is not None else None
             if verified is not None:

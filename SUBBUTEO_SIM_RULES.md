@@ -23,7 +23,9 @@ traditional tabletop play.
 - **View:** 2D, top-down.
 - **Teams:** One goalkeeper plus 4, 5, or 10 field figures (5-, 6-, or
   11-a-side).
-- **Duration:** Two 15-minute halves, simulated or real-time.
+- **Duration:** Two 15-minute halves in real time. The clock runs throughout:
+  while pieces and the ball move, while the AI players decide, during the
+  0.10-second response window, and during pauses between flicks.
 - **Turn cycle:** The attacking player flicks and physics resolves until the
   attack settles. The defending player then has a 0.10-second response window
   to move one field piece with a block-flick. If the defender does not move a
@@ -32,6 +34,9 @@ traditional tabletop play.
   contacting a defending field piece or goalkeeper changes possession. An
   illegal defensive block-flick instead resets all attacking field-piece
   touch counts and returns play to the attacker.
+- **No limit on an attack:** An attack has no maximum number of flicks; it
+  continues until possession changes or a goal is scored. There is no option
+  to give up: a player always makes a move.
 
 ## Project dictionary
 
@@ -260,8 +265,23 @@ The following are field-figure counts; each team also has one goalkeeper.
 | 5-a-side | 2-2 (square/box) | 2 defenders `0.20`, 2 forwards `0.45` |
 | 5-a-side | 3-0-1 (park the bus) | 3 defenders `0.16`, 1 forward `0.48` |
 
+Where a template gives no `Y` positions for a line, space that line's figures
+evenly across the pitch width: for `n` figures in a line, place figure `k`
+(`k = 1 … n`) at `Y = k / (n + 1)`. For example, two figures sit at
+`Y = 0.33/0.67` and four at `Y = 0.2/0.4/0.6/0.8`. Explicit `Y` values in a
+template take precedence. This spacing is provisional and will be reviewed in
+testing.
+
 Use the active formation template for kick-off placement and possession
 resets.
+
+### First full match
+
+The first full match is **5-a-side** (one goalkeeper and four field figures
+per team), with both teams in the **2-2 (square/box)** formation and evenly
+spaced lines: defenders at `(0.20, 0.33)` and `(0.20, 0.67)`, forwards at
+`(0.45, 0.33)` and `(0.45, 0.67)`, in each team's own reference orientation.
+This choice is for testing and will be reviewed.
 
 ## Turn-taking and possession
 
@@ -301,6 +321,20 @@ resets.
   contacts a defending field piece, whether stationary or moving, or the
   goalkeeper, possession transfers to the defending player. Resolve the
   resulting physical motion before the next attacking flick.
+- There is no limit on the number of flicks in one attack.
+- **Deliberate step back:** When no forward or sideways flick keeps
+  possession safely, the attacker may deliberately move the ball backward,
+  provided it leaves the ball where a player piece with touches left has a
+  clear, legal next contact. This is the standard fallback. Riskier styles of
+  play that accept a flick likely to lose possession may be added later as a
+  per-team setting; they are not the default.
+- **Stuck attacker:** If the attacking player has no flick that can legally
+  touch the ball, it does not give up. It makes a block-flick style move with
+  one field piece instead, placed to obstruct the opponent's next move. The
+  move follows the block-flick constraints below: capped strength, and no
+  contact with the ball or an opposing piece. Because the attacker did not
+  touch the ball, this counts as a missed flick and possession transfers to the
+  opposing player in the normal way. The moved piece stays where it ends.
 
 ### Defensive block-flicks
 
@@ -314,6 +348,16 @@ resets.
   counters reset to zero.
 - A legal block-flicked piece stays where its block-flick leaves it for
   subsequent play.
+- The block-flick is a real flick, resolved until everything has stopped and
+  then checked for legality. The 0.10-second window is the time to decide, not
+  the time the movement takes.
+- **Strength cap:** The cap depends on the piece's distance from the ball and
+  grows with it, so a distant piece may flick harder to get back into play
+  while a piece near the ball may only make a small adjustment. Starting
+  values, to be tuned in testing: 20% of a full flick within 100 mm of the
+  ball, rising to 60% at 400 mm or more.
+- **Piece choice:** The defender moves the piece closest to the ball among
+  those that can reach a legal blocking position within their cap.
 
 ### Fouls
 
@@ -326,7 +370,11 @@ position reset, or touch-count reset is awarded.
 2. **Teammate contact:** An attacking figure hits a teammate before touching
    the ball.
 3. **Smashing:** An attacking flick displaces two or more defending figures
-   in their half, unless it is a shot on goal.
+   in their half, unless it is a shot on goal. A defending figure counts as
+   displaced if, once everything has stopped, it is 5 mm or more from where it
+   stood when the flick began. A figure that is nudged and comes back to within
+   5 mm does not count. The 5 mm threshold is provisional, to be reviewed in
+   testing.
 
 An illegal defensive block-flick is handled differently: it is invalidated,
 possession remains with the attacking player, and all attacking field-piece
@@ -399,8 +447,9 @@ Apply these priorities in order; a higher priority overrides a lower one.
    `X < 280 / L` toward decreasing X, where `L` is the playing-area length in
    millimeters) **and** there is a clear vector to the goal mouth, shoot.
 2. **Keep possession and avoid fouls:** Contact the ball before any defender.
-   If a direct path risks illegal contact, choose a bank shot or another
-   figure. The attacking player may choose any available player piece for a
+   If a direct path risks illegal contact, choose another figure; consider a
+   bank shot or bank pass only when no direct shot or pass works (see
+   [Clear lanes and bank shots](#clear-lanes-and-bank-shots)). The attacking player may choose any available player piece for a
    flick; it need not use all three touches with the current piece. Prefer a
    controlled move that keeps the ball close to a teammate, selecting the
    lower required flick strength and then the least ball travel among safe
@@ -419,6 +468,11 @@ Apply these priorities in order; a higher priority overrides a lower one.
 3. **Advance:** When the higher priorities permit, move the ball forward
    (`X` increasing toward the opponent's goal) or position a receiver in a
    useful forward zone.
+4. **Step back:** If no safe forward or sideways move exists, make a
+   deliberate step back that leaves a clear, legal next contact.
+5. **Stuck:** If no flick can legally touch the ball, make a block-flick style
+   move to obstruct the opponent; possession then changes (see
+   [Attacking flicks](#attacking-flicks)).
 
 ### Defender
 
@@ -435,9 +489,23 @@ continues.
 3. **Intercept passes:** Otherwise, position a figure between the ball and
    the nearest uncontrolled attacking figure.
 
-Within the final 280 mm, attacker priorities should favor direct or bank-shot
-attempts toward goal. Raycasting for shots and passes must account for wall
-rebound vectors and the wall restitution value.
+In each case, move the piece closest to the ball that can legally reach the
+blocking position within its strength cap.
+
+### Clear lanes and bank shots
+
+- **Clear lane:** A shot or pass has a clear lane if simulating the flick with
+  the real physics, on a copy of the current board, gives the intended result
+  without a foul or loss of possession. The simulation accounts for every
+  piece's footprint and for wall rebounds with their restitution. No separate
+  minimum clearance is defined. The defender uses the same check. This rule is
+  provisional and will be reviewed in testing.
+- **Bank shot:** A shot or pass that deliberately rebounds off a boundary wall
+  (a touchline, or a goal line outside the goal mouth) on its way to the goal
+  or a teammate. The attacker considers a bank shot or bank pass only when no
+  direct shot or pass has a clear lane.
+- Within the final 280 mm, attacker priorities favor direct shots, then bank
+  shots, toward goal.
 
 ## Engine state cycle
 
@@ -448,8 +516,14 @@ rebound vectors and the wall restitution value.
    block-flick or skip the response.
 5. Validate any block-flick, then continue with the next attacking flick.
 
-For a future physics refinement, resolve competing collision events in order
-of time of contact rather than by arbitrary processing order.
+If the attacker is stuck (no flick can legally touch the ball), step 1 is its
+block-flick style move, and step 3 transfers possession.
+
+Resolve competing collision events in order of time of contact rather than by
+arbitrary processing order. If two events happen at exactly the same moment,
+a defending piece's touch takes precedence; for example, a defender touching
+the ball at the instant it reaches the goal line or goal mouth counts as a
+touch by the defender. This is a future physics refinement.
 
 ## Implementation status
 
@@ -474,9 +548,19 @@ turn controller.
 - **Simulation-verified flicks:** Before a flick is used, it is simulated on a
   copy of the world through the normal physics. Flicks that miss the ball,
   strike another piece before the ball, touch an opposing piece or lose
-  possession are rejected. If no planner candidate survives, exploratory
-  flicks around the ball are simulated, which allows sideways and backward
-  moves when they leave the ball near a teammate or in the shooting area.
+  possession are rejected. A flick is also rejected, unless it scores, if
+  afterward no piece that may flick next has a clear, in-range straight path
+  to the ball. If no planner candidate survives, exploratory flicks around the
+  ball are simulated, which allows sideways and backward moves when they leave
+  the ball near a teammate or in the shooting area.
+- **Deliberate step back and loop guard:** A flick that moves the ball more
+  than 50 mm back is treated as a step back and is used only when no forward or
+  sideways move survives; among step backs, one that leaves a piece behind the
+  ball (ready to push it forward) is preferred. The controller remembers where
+  the ball stopped earlier in the attack, and a flick that returns it within
+  8 mm of one of those positions ranks last. Inside the shooting area,
+  progress is measured as getting closer to the goal mouth, so a ball pinned
+  beside the goal is worked along the goal line toward it.
 - **Turn controller:** Touch counts, touch resets on a pass to a teammate, goal
   detection, and possession loss when a flick misses the ball, the ball
   contacts an opposing piece, or play settles with possession transferred. It
@@ -486,14 +570,17 @@ turn controller.
 - **Scenario harness:** Seeded random attacking scenarios run headlessly to
   report goal rate, flicks per goal, outcome counts, decision statistics and
   reproducible failing seeds. Reference result, 100 seeds with three pieces:
-  74% goal rate with verification, against 23% without it.
+  93% goal rate (12.7 flicks per goal) with verification, against 23%
+  without it.
 - **Rendering:** Pitch, score bug, timer, start menu, and piece rendering.
 
 ### Not yet implemented
 
 - **Defending:** Defender planning, the 0.10-second response window, block-flick
-  validation, and the illegal block-flick reset. The block-flick is to be a
-  capped-strength flick resolved to rest and then checked for legality.
+  validation, the distance-based strength cap, choosing the piece closest to
+  the ball, and the illegal block-flick reset.
+- **Stuck attacker move:** The stuck attacker's block-flick style move is not
+  built; it will reuse the defender's block-flick planner.
 - **Fouls in play:** Illegal contact, teammate contact before the ball, and
   smashing are not applied as rulings during a match. The verifier only uses
   the first two to reject an attacker's own candidate flicks. Smashing is not
@@ -503,9 +590,13 @@ turn controller.
   ball paths. Simulation now checks the real result, including wall rebounds,
   but the planner does not deliberately propose bank shots and does not
   account for moving defenders.
-- **Match flow:** Kick-off, halves, the match clock, formations, and restarts.
+- **Match flow:** Kick-off, halves, the real-time match clock, formations
+  (including even `Y` spacing and the first 5-a-side 2-2 match), and restarts.
   The demo shows only an attacking sequence.
-- **No-move fallback:** Sampled flicks now cover many cases the planner misses,
-  but a sequence still ends with a `no_plan` outcome when neither the planner
-  nor the sampler finds a safe flick (about 18% of the reference scenarios).
-  Some other runs wander until the 30-flick limit.
+- **No-move outcome:** A sequence still ends with a `no_plan` outcome when no
+  safe flick exists (5% of the reference scenarios). All remaining cases are a
+  lone piece far ahead of its teammates that cannot reach the shooting area in
+  its three touches; the planner does not yet look ahead to avoid this. The
+  rules allow no such outcome in a match (see "Stuck attacker"). A few slow
+  attacks (2%) reach the scenario harness's 30-flick cut-off, which is a test
+  stop only, not a game rule.

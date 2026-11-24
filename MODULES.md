@@ -110,15 +110,33 @@ What-if simulation of flicks. It never changes the world it is given.
   `FlickOutcome`: whether the flicker touched the ball, whether it hit another
   piece before the ball (a foul), whether the ball touched an opposing piece,
   whether possession was kept, goal, receiving teammate, where the ball
-  stopped, forward progress, and the gap to the nearest teammate who can flick
-  next. `FlickOutcome.keeps_possession` is the combined legality check.
-- `plan_verified_team_flick()`: simulates the planner's candidates, rejects any
-  that lose the ball or foul, and ranks the rest as goal, setup pass, advance
-  or pass, then a non-scoring shot. Within a group it prefers a ball that stops
-  within 100 mm of a teammate, then lower strength, then shorter travel. If no
-  planner candidate survives it simulates sampled flicks instead, which may go
-  forward, sideways or backward; a non-forward move is only accepted if it
-  leaves the ball near a teammate or inside the shooting area. The result is a
+  stopped, progress toward the goal, the gap to the nearest teammate who can
+  flick next, and whether a next contact is available (see below).
+  `FlickOutcome.keeps_possession` is the combined legality check.
+- Progress (`ball_progress_mm`): movement along the pitch length toward the
+  attacked goal. When the ball starts inside the shooting area it is instead
+  the reduction in distance to the goal-mouth center, so working the ball along
+  the goal line toward the goal counts as progress.
+- Next contact: `has_next_contact()` checks that at least one piece that may
+  flick next (touches left, the receiver, or the flicker after a pass) has the
+  ball within flick range (600 mm at full strength) on a straight path no
+  other piece blocks. With `behind_ball_for` set, only pieces behind the ball
+  count, so their flick can push it forward. The outcome records both
+  (`next_contact_available`, `forward_contact_available`).
+- `plan_verified_team_flick()`: simulates the planner's candidates and rejects
+  any that lose the ball, foul, or leave no next contact (unless they score).
+  It ranks the rest as goal, setup pass, advance or pass, a non-scoring shot,
+  then a **step back** (ball moved more than 50 mm back), then a **repeat**
+  (ball stops within 8 mm of a position where it already stopped in this
+  attack, from `visited_ball_positions`). Within a group it prefers a flick
+  that leaves a piece behind the ball, then a ball that stops within 100 mm of
+  a teammate, then lower strength, then shorter travel.
+- Sampled fallback: if no planner candidate survives, or the best one is a step
+  back or a repeat, it simulates sampled flicks too, which may go forward,
+  sideways or backward; a non-forward move is only accepted if it leaves the
+  ball near a teammate or inside the shooting area. Planned and sampled flicks
+  are compared on shared levels (goal, advance, step back, repeat) and the
+  better level wins, the planned flick on a tie. The result is a
   `VerifiedFlick` whose `source` is `planned` or `sampled`.
 - Limits: 12 planner candidates and 40 sampled candidates per decision, each
   simulated for at most 600 steps of 1/60 s.
@@ -133,8 +151,10 @@ The turn controller. It runs one team's attack flick by flick.
   detects goals and lost possession, waits out the pause between flicks, asks
   `plan_verified_team_flick` for the next flick (or `plan_team_flick` when
   `verify_flicks=False`) and applies it.
-- State: attacking team, active piece, per-piece touch counts, flick count and
-  outcome.
+- State: attacking team, active piece, per-piece touch counts, flick count,
+  outcome, and `ball_stops` (where the ball stood before each flick of the
+  current attack, cleared on `reset()`), which it passes to the verifier as
+  `visited_ball_positions` to avoid loops.
 - `decision_stats` (`DecisionStats`): the duration of every flick decision and
   how many came from a planner candidate, a sampled flick, or found no move.
 - `hand_over_on_loss`: when `False` a lost ball ends the sequence (training);
@@ -176,7 +196,7 @@ These draw only. They hold no match rules or state.
 
 | File | Purpose |
 |---|---|
-| `demo_ai_flick.py` | Interactive AI tester with three modes. Free-play flicks a piece with a chosen strength. Training without a ball navigates a piece to a target around obstacles and moving dummies. Training with a ball plays an attack toward the right-hand goal through `TurnController`. The scenario editor and drawing live here; game logic does not. |
+| `demo_ai_flick.py` | Interactive AI tester with three modes. Free-play flicks a piece with a chosen strength. Training without a ball navigates a piece to a target around obstacles and moving dummies. Training with a ball plays an attack toward the right-hand goal through `TurnController`. The scenario editor and drawing live here; game logic does not. Simulated time per frame is capped at `MAX_FRAME_SECONDS` (1/30 s), so a slow AI decision pauses the picture instead of making pieces jump. |
 | `demo_physics.py` | Untimed physics sandbox with an 11-a-side layout, score bug and a start menu. |
 | `demo_pitch.py` | Previews the empty pitch and the match-setup piece rendering. |
 | `demo_scorebug.py` | Standalone preview of the score bug and timer. |
@@ -190,22 +210,24 @@ Run all tests with `python -m unittest discover -p "test_*.py"`.
 | `test_sim_physics.py` | Boundaries, goals, possession transfers, net damping, collisions, flick strength, piece-contact record and world cloning. |
 | `test_sim_ai_flick.py` | Aiming and strength limits, plus the training UI's coordinate panel and rulers. |
 | `test_sim_ai_brain.py` | Waypoints, contact planning, passes, setup passes, touch limits, attack direction, candidate ordering and sampled flicks. |
-| `test_sim_ai_verify.py` | Simulated outcomes, foul-before-ball detection, verified selection and the sampled fallback. |
-| `test_sim_turns.py` | Controller outcomes, hand-over, direction, the three-touch limit and decision statistics. |
+| `test_sim_ai_verify.py` | Simulated outcomes, foul-before-ball detection, verified selection, the sampled fallback, the next-contact check, step-back and repeat ranking, and progress measurement inside and outside the shooting area. |
+| `test_sim_turns.py` | Controller outcomes, hand-over, direction, the three-touch limit, decision statistics and the recorded ball stops. |
 | `test_sim_scenarios.py` | Seed reproducibility, home and away symmetry over a short horizon, and report content. |
 
 ## How a flick flows through the modules
 
 1. `TurnController.update()` calls `PhysicsWorld.step()`.
-2. When everything has settled, it calls `plan_verified_team_flick()` with the
-   world, the attacking team, touch counts and obstacles.
+2. When everything has settled, it records the ball position in `ball_stops`
+   and calls `plan_verified_team_flick()` with the world, the attacking team,
+   touch counts, obstacles and those earlier ball positions.
 3. That asks `plan_team_flick_candidates()` for ranked `FlickPlan`s, using the
    team's `attack_direction()`. The planner returns normalized coordinates and
    does not touch the world.
 4. Each candidate is simulated on a `PhysicsWorld.clone()`. Candidates that
-   miss the ball, foul, hit an opposing piece or lose possession are rejected.
-   If none survive, `sample_flick_candidates()` supplies exploratory flicks,
-   which are simulated and ranked the same way.
+   miss the ball, foul, hit an opposing piece, lose possession or leave no
+   next contact are rejected. If none survive, or the best is only a step back
+   or a repeat, `sample_flick_candidates()` supplies exploratory flicks, which
+   are simulated and ranked the same way.
 5. The controller applies the chosen plan to the real world with
    `flick_toward_target()`, which calls `PhysicsWorld.flick()`.
 6. Physics runs. The controller reads `last_ball_contacts`, `last_goal` and
@@ -217,10 +239,16 @@ Run all tests with `python -m unittest discover -p "test_*.py"`.
 ## Planned modules
 
 - A defender planner (for example `sim_ai_defence.py`) for the response window
-  and block-flick, and match flow (kick-off, halves, clock, formations) built on
-  `TurnController` with `hand_over_on_loss=True`. See the implementation status
-  in the rules file.
+  and block-flick. The same planner will give a stuck attacker its last-resort
+  block-flick style move.
+- Match flow (for example `sim_match.py`: kick-off, halves, real-time clock,
+  formations) built on `TurnController` with `hand_over_on_loss=True`.
 
-Other files: `AI_QUERIES.md` (open design questions), `NOTES.md` (drill ideas),
-`SCENARIO_NOTES.md` and `SCENARIO_TEMPLATE.md` (recording failing scenarios),
-and the `*.bat` helpers for git.
+See the implementation status in the rules file and the plan in
+`AI_NOTES.md`.
+
+Other files: `CLAUDE.md` (instructions for Claude Code), `AI_NOTES.md`
+(handover and plan), `AI_QUERIES.md` (design questions and answers),
+`NOTES.md` (drill ideas), `USER_NOTES.md` (the user's own notes),
+`SCENARIO_TEMPLATE.md` (recording failing scenarios), and the `*.bat` helpers
+for git.

@@ -29,24 +29,27 @@ you. The last column says what is waiting on each one.
 | Q3 | Simultaneous events | Answered in principle; tie-break is Q12 | Time-of-contact ordering |
 | Q4 | Goalkeeper saves | Answered | Nothing (placeholder) |
 | Q5 | Teammate contact and fouls | Answered | Nothing |
-| Q6 | Clear shooting and passing lanes | **Open** | Defenders, attacker tuning |
-| Q7 | Bank shots | **Open** | Attacker tuning |
+| Q6 | Clear shooting and passing lanes | Answered: simulate and see, for now | Nothing |
+| Q7 | Bank shots | Answered: only when no direct shot or pass works | Attacker tuning (step 3) |
 | Q8 | Setup-pass validity | Answered; optional numeric rule is Q20 | Nothing |
 | Q9 | Block-flick timing | Answered; strength cap is Q15 and skipping is Q14 | Defenders |
-| Q10 | Formation Y-coordinates | **Open** | Full match |
+| Q10 | Formation Y-coordinates | Answered: even spacing, for now | Nothing |
 | Q11 | Goalkeeper collision thickness | **Open** | Goalkeeper work |
-| Q12 | Same-time-of-contact tie-break | **Open** | Time-of-contact ordering |
+| Q12 | Same-time-of-contact tie-break | Answered: defending piece wins | Nothing |
 | Q13 | Defenders near the goal and shooting area | **Open** | Defenders |
 | Q14 | Defender skipping a move on purpose | **Open** | Defenders |
-| Q15 | Strength cap for a block-flick | **Open** | Defenders |
-| Q16 | What counts as "displacing" defenders (smashing) | **Open** | Foul detection |
-| Q17 | No-move fallback, repositioning and runaway attacks | **Open** | Next planned step |
-| Q18 | How match time advances | **Open** | Full match |
-| Q19 | Squad size and formation for the first full match | **Open** | Full match |
+| Q15 | Strength cap for a block-flick | Answered: context-based, option A in Q22 | Nothing |
+| Q16 | What counts as "displacing" defenders (smashing) | Answered: 5 mm, for now | Nothing |
+| Q17 | No-move fallback, repositioning and runaway attacks | Answered (part 2 settled by Q21) | Nothing |
+| Q18 | How match time advances | Answered: real time | Nothing |
+| Q19 | Squad size and formation for the first full match | Answered: 5-a-side, 2-2 (Q23) | Nothing |
 | Q20 | Numeric rule for a setup pass | Optional | Nothing is blocked |
+| Q21 | What a stuck attacker may do in a match | Answered: a block-flick move, then possession changes | Nothing |
+| Q22 | How a context-based block-flick cap works | Answered: option A; prefer the piece closest to the ball | Nothing |
+| Q23 | Which 5-a-side formation for the first match | Answered: 2-2 for both teams, for now | Nothing |
 
-Most useful to answer first: **Q17** (it is the next piece of work), then
-**Q13 to Q16** (defenders), then **Q6, Q7, Q10, Q18 and Q19** (full match).
+Most useful to answer first: **Q13 and Q14** (defenders, step 4), then **Q11**
+(goalkeeper). Q20 is optional. Nothing blocks step 2, the next piece of work.
 
 ## Questions
 
@@ -121,7 +124,7 @@ How should the AI decide that a shot or pass has a clear path? Should it test
 the ball's full path against the physical footprints of figures and the
 goalkeeper, including any expected wall rebounds, or use another rule?
 
-**Your response: TBD** 
+**Your response: Let's go with the below proposal for now and see how it works.** 
 
 > **Current state:** The attacker no longer relies on a geometric lane test
 > alone. Each candidate flick is simulated on a copy of the world with the real
@@ -139,7 +142,18 @@ When should the attacker consider a bank shot, and how should it choose one?
 For example, should it compare predicted rebound paths against direct shots and
 passes, or only use a bank shot when a direct route is blocked?
 
-**Your response: TBD** 
+**Your response: I agree with the suggested default.** 
+
+> **AI note:** Recorded: the planner proposes bank shots and bank passes only
+> when no direct shot or pass survives simulation.
+
+> **AI note (answering your question):** Yes. A bank shot is a shot or pass
+> that deliberately rebounds off a boundary wall (a touchline or a goal line
+> outside the goal mouth) on its way to the goal or to a teammate, like a
+> cushion shot in snooker. **Still to decide:** should the planner propose them
+> on purpose, and if so only when the direct route is blocked, or compared with
+> direct shots and passes every time? Suggested default: only when no direct
+> shot or pass survives simulation.
 
 > **Current state:** The planner does not propose bank shots on purpose. The
 > exploratory flicks can produce a rebound by accident, and simulation would
@@ -190,7 +204,7 @@ How should the unspecified Y-coordinates and spacing in the formation
 templates be chosen? Should unspecified lines use even spacing across the pitch,
 or do you want to specify positions for each squad and formation?
 
-**Your response: TBD** 
+**Your response: Lets go with even spacing for now and see how it works.** 
 
 ### Q11 — Goalkeeper collision thickness
 
@@ -208,7 +222,11 @@ the goal line at the same instant a defender touches it. Options: a goal always
 wins; a defender touch always wins; or the order they appear in the list of
 pieces.
 
-**Your response: TBD** 
+**Your response: Lets try prioritising a defending player piece, that seems most fair.** 
+
+> **AI note:** Recorded. When the ball touches a defending piece in the same
+> instant as another event (for example reaching the goal line), the defending
+> touch wins. Applies once the ordered contact log exists (step 4).
 
 ### Q13 — Defenders near the goal and in the shooting area
 
@@ -237,7 +255,9 @@ percentage of a full flick? A low cap keeps it a positioning move, while a high
 cap lets a defender cross much more of the pitch. The suggested starting point
 is 50%.
 
-**Your response: TBD** 
+**Your response: It needs to be context based, i.e. player piece relative position to the ball.** 
+
+> **AI note:** Recorded as a principle. The detail is asked in Q22.
 
 ### Q16 — What counts as "displacing" defenders
 
@@ -247,7 +267,7 @@ move to count as displaced: any movement, or a minimum distance such as 5 mm?
 Does a piece that is nudged and then comes back count? The suggested default is
 a minimum of 5 mm from its start position when everything has stopped.
 
-**Your response: TBD** 
+**Your response: Go with the proposed amount for now and we'll see how it works in testing.** 
 
 ### Q17 — No-move fallback, repositioning and runaway attacks
 
@@ -265,7 +285,13 @@ flick exists, and 8 run to the 30-flick limit without scoring. Please decide:
    Subbuteo has no such limit, but the simulator needs a safety stop. The
    suggested default is 30 flicks.
 
-**Your response: TBD** 
+**Your response: 1. Deliberate step back is the standard, though we might introduce riskier styles of play that favour riskier flicks. 2. If an attacker is stuck then can they at least sabotage the defending teams attempt to take possession, by making a block flick for example. For the purposes of the training mode where there are no defenders this may be a moot point, in a real match it will be more relevant. 3. There is no limit. ** 
+
+> **AI note:** Recorded as: (1) a deliberate step back is the standard
+> fallback; riskier flicks become a later per-team play-style setting, not the
+> default; (3) no flick limit in the rules. The harness keeps its 30-flick cut-off
+> only as a test stop, not as a rule. Part 2 is followed up in Q21; in training
+> a stuck attack still ends with `no_plan`.
 
 ### Q18 — How match time advances
 
@@ -274,7 +300,11 @@ moving, during the 0.10-second response window, and during the pauses between
 flicks? Or does each flick cost a fixed amount of match time? Is the clock
 based on real time or on simulated time?
 
-**Your response: TBD** 
+**Your response: Its all real time.** 
+
+> **AI note:** Recorded: the match clock runs in real time throughout,
+> including movement, decision time, the 0.10 s window and pauses. Planning
+> time therefore uses match time (currently up to about 0.4 s a flick).
 
 ### Q19 — Squad size and formation for the first full match
 
@@ -283,7 +313,10 @@ Which squad size and formation should the first full match use: 5-a-side,
 fewest pieces and the fastest decisions. It needs a decision on which template
 to use, for example 2-2 (square), and the Y-coordinates in Q10.
 
-**Your response: TBD** 
+**Your response: Yes, for testing go for 5 a side.** 
+
+> **AI note:** Recorded: 5-a-side (one goalkeeper and four field pieces). The
+> formation is asked in Q23.
 
 ### Q20 — Numeric rule for a setup pass (optional)
 
@@ -293,3 +326,66 @@ end within a stated distance of another piece? Skipping this is fine; the
 current behaviour is described under Q8.
 
 **Your response: TBD** 
+
+### Q21 — What a stuck attacker may do in a match
+
+In Q17 you asked whether a stuck attacker could "at least sabotage the
+defending team's attempt to take possession, by making a block flick". In a
+match, when the attacker has no legal flick that touches the ball:
+
+1. Does possession pass to the other team straight away?
+2. Before or instead of that, may the stuck attacker make one block-flick style
+   move (one piece, capped strength, must not touch the ball or an opposing
+   piece) to get in the way of the new attacker? If it does, does possession
+   still change afterwards?
+
+Suggested default: possession passes to the other team, and the stuck team
+then gets the normal 0.10-second response window as the new defender, so it
+can make its block-flick then. No extra move beyond that. Training mode has no
+defenders, so a stuck attack there simply ends.
+
+**Your response: If I'm the player and I can't make a flick that will touch the ball, I would attempt to make a block flick. Because I haven't made contact with the ball the normal rules of a change of possesion apply. A player should make some form of move, there isn't a sort of 'give up' option.**
+
+> **AI note:** Recorded: there is no "give up" option. A stuck attacker makes a
+> block-flick style move with one piece (a capped flick that does not touch
+> the ball), placed to obstruct the opponent's next move. It did not touch the
+> ball, so possession passes to the other team as for any missed flick. It
+> reuses the defender's block-flick planner, so it is built with the defenders
+> (step 4). Until then, training and the harness still report `no_plan`.
+
+### Q22 — How a context-based block-flick cap works
+
+You answered Q15 that the cap should depend on the piece's position relative to
+the ball. Which of these do you mean?
+
+- **A.** The cap grows with the piece's distance from the ball, so a distant
+  piece may flick harder to get back into play, and a piece near the ball may
+  only shuffle (for example 20% within 100 mm of the ball, rising to 60% at
+  400 mm or more).
+- **B.** The cap shrinks with distance, so only pieces near the ball can make a
+  meaningful block.
+- **C.** No fixed cap: the strength is whatever is needed to reach the chosen
+  blocking spot, and the legality check (no touching the ball or an attacker)
+  is the only limit.
+
+Suggested default: A, with the figures above as a starting point to tune.
+
+**Your response: Yes, go with A. Though realistically I'd want to pick the player piece closest to the ball.**
+
+> **AI note:** Recorded: option A (the cap grows with the piece's distance from
+> the ball; starting figures 20% within 100 mm rising to 60% at 400 mm or more,
+> to tune). The defender picks the piece closest to the ball among those that
+> can reach a legal blocking spot, rather than the one needing the least
+> strength.
+
+### Q23 — Which 5-a-side formation for the first match
+
+5-a-side is chosen (Q19) with even spacing (Q10). The rules list three 5-a-side
+templates: 1-2-1 (diamond), 2-2 (square/box) and 3-0-1 (park the bus). Which
+should both teams use first? Suggested default: 2-2 for both teams, because it
+is symmetrical and easiest to check.
+
+**Your response: Go with your suggestion, we can review again in testing.**
+
+> **AI note:** Recorded: 2-2 (square/box) for both teams, with even Y spacing,
+> to review in testing.

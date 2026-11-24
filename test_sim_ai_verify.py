@@ -4,6 +4,12 @@ import unittest
 
 from sim_ai_brain import FlickPlan, plan_team_flick_candidates
 from sim_ai_verify import (
+    REPEAT_CATEGORY,
+    STEP_BACK_CATEGORY,
+    FlickOutcome,
+    _ball_progress_mm,
+    _rank_key,
+    has_next_contact,
     plan_verified_team_flick,
     simulate_flick,
     simulate_plan,
@@ -347,6 +353,211 @@ class VerifiedPlanningTests(unittest.TestCase):
         self.assertIsNotNone(verified)
         self.assertTrue(verified.outcome.goal)
 
+
+
+def _outcome(
+    ball_position: Vector2,
+    *,
+    progress_mm: float = 0.0,
+    goal: bool = False,
+    forward_contact: bool = True,
+) -> FlickOutcome:
+    """Create a possession-keeping outcome for ranking tests."""
+    return FlickOutcome(
+        flick_applied=True,
+        ball_contacted=True,
+        opponent_contact=False,
+        possession_kept=True,
+        goal=goal,
+        receiver_id=None,
+        ball_position=ball_position,
+        ball_travel_mm=abs(progress_mm),
+        ball_in_shooting_area=False,
+        teammate_gap_mm=20.0,
+        settled=True,
+        ball_progress_mm=progress_mm,
+        forward_contact_available=forward_contact,
+    )
+
+
+_ADVANCE = FlickPlan(
+    piece_target=Vector2(0.5, 0.5),
+    ball_target=Vector2(0.5, 0.5),
+    strength=0.3,
+    action="advance",
+    flicking_piece_id="home-1",
+)
+
+
+class NextContactTests(unittest.TestCase):
+    """Check the test for a clear, in-range next contact with the ball."""
+
+    def test_clear_in_range_piece_has_a_next_contact(self) -> None:
+        """A nearby piece with nothing in the way can play the ball."""
+        world = _world(
+            [_piece("home-1", HOME, Vector2(0.5, 0.5))],
+            Vector2(0.55, 0.5),
+        )
+
+        self.assertTrue(has_next_contact(world, ["home-1"]))
+
+    def test_piece_in_the_path_blocks_the_next_contact(self) -> None:
+        """A piece between the flicker and the ball blocks the route."""
+        world = _world(
+            [
+                _piece("home-1", HOME, Vector2(0.5, 0.5)),
+                _piece("home-2", HOME, Vector2(0.525, 0.5)),
+            ],
+            Vector2(0.56, 0.5),
+        )
+
+        self.assertFalse(has_next_contact(world, ["home-1"]))
+        self.assertTrue(has_next_contact(world, ["home-1", "home-2"]))
+
+    def test_ball_out_of_flick_range_has_no_next_contact(self) -> None:
+        """A piece more than a full flick away cannot reach the ball."""
+        world = _world(
+            [_piece("home-1", HOME, Vector2(0.1, 0.5))],
+            Vector2(0.7, 0.5),
+        )
+
+        self.assertFalse(has_next_contact(world, ["home-1"]))
+
+    def test_behind_ball_depends_on_attack_direction(self) -> None:
+        """Only a piece behind the ball counts for a forward next contact."""
+        world = _world(
+            [_piece("home-1", HOME, Vector2(0.6, 0.5))],
+            Vector2(0.55, 0.5),
+        )
+
+        self.assertFalse(
+            has_next_contact(world, ["home-1"], behind_ball_for=1)
+        )
+        self.assertTrue(
+            has_next_contact(world, ["home-1"], behind_ball_for=-1)
+        )
+
+    def test_third_touch_that_blocks_the_only_teammate_is_flagged(self) -> None:
+        """A last touch leaving the flicker between teammate and ball fails."""
+        world = _world(
+            [
+                _piece("home-1", HOME, Vector2(0.5, 0.5)),
+                _piece("home-2", HOME, Vector2(0.4, 0.5)),
+            ],
+            Vector2(0.52, 0.5),
+        )
+
+        outcome = simulate_flick(
+            world,
+            "home-1",
+            Vector2(0.52, 0.5),
+            0.15,
+            touch_counts={"home-1": 2},
+        )
+
+        self.assertTrue(outcome.keeps_possession)
+        self.assertFalse(outcome.next_contact_available)
+
+    def test_same_flick_with_touches_left_keeps_a_next_contact(self) -> None:
+        """The flicker itself counts while it still has touches left."""
+        world = _world(
+            [
+                _piece("home-1", HOME, Vector2(0.5, 0.5)),
+                _piece("home-2", HOME, Vector2(0.4, 0.5)),
+            ],
+            Vector2(0.52, 0.5),
+        )
+
+        outcome = simulate_flick(
+            world,
+            "home-1",
+            Vector2(0.52, 0.5),
+            0.15,
+            touch_counts={"home-1": 0},
+        )
+
+        self.assertTrue(outcome.next_contact_available)
+        self.assertTrue(outcome.forward_contact_available)
+
+
+class RankingTests(unittest.TestCase):
+    """Check step backs, repeats and progress measurement."""
+
+    def test_large_backward_move_is_a_step_back(self) -> None:
+        """Moving the ball well back ranks after forward moves."""
+        back = _rank_key(
+            _ADVANCE,
+            _outcome(Vector2(0.4, 0.5), progress_mm=-80.0),
+        )
+        ahead = _rank_key(
+            _ADVANCE,
+            _outcome(Vector2(0.6, 0.5), progress_mm=30.0),
+        )
+
+        self.assertEqual(back[0], STEP_BACK_CATEGORY)
+        self.assertLess(ahead, back)
+
+    def test_returning_to_a_visited_position_is_a_repeat(self) -> None:
+        """A ball stopping where it already stopped ranks last."""
+        visited = [Vector2(0.5, 0.5)]
+        repeat = _rank_key(_ADVANCE, _outcome(Vector2(0.5, 0.5)), visited)
+        back = _rank_key(
+            _ADVANCE,
+            _outcome(Vector2(0.4, 0.5), progress_mm=-80.0),
+            visited,
+        )
+
+        self.assertEqual(repeat[0], REPEAT_CATEGORY)
+        self.assertLess(back, repeat)
+
+    def test_a_goal_is_never_a_repeat(self) -> None:
+        """Scoring ranks first even at a visited position."""
+        key = _rank_key(
+            _ADVANCE,
+            _outcome(Vector2(0.5, 0.5), goal=True),
+            [Vector2(0.5, 0.5)],
+        )
+
+        self.assertEqual(key[0], 0)
+
+    def test_teammate_behind_the_ball_is_preferred(self) -> None:
+        """Between equal moves, one leaving a forward contact ranks first."""
+        ready = _rank_key(_ADVANCE, _outcome(Vector2(0.6, 0.5)))
+        not_ready = _rank_key(
+            _ADVANCE,
+            _outcome(Vector2(0.6, 0.5), forward_contact=False),
+        )
+
+        self.assertLess(ready, not_ready)
+
+    def test_progress_in_shooting_area_is_toward_the_goal_mouth(self) -> None:
+        """Along the goal line toward the goal counts as progress."""
+        toward = _ball_progress_mm(
+            Vector2(0.99, 0.8),
+            Vector2(0.99, 0.7),
+            HOME,
+        )
+        away = _ball_progress_mm(
+            Vector2(0.99, 0.6),
+            Vector2(0.99, 0.7),
+            HOME,
+        )
+        mirrored = _ball_progress_mm(
+            Vector2(0.01, 0.8),
+            Vector2(0.01, 0.7),
+            AWAY,
+        )
+
+        self.assertGreater(toward, 0.0)
+        self.assertLess(away, 0.0)
+        self.assertAlmostEqual(toward, mirrored)
+
+    def test_progress_outside_shooting_area_is_along_the_length(self) -> None:
+        """Outside the shooting area only movement along X counts."""
+        self.assertAlmostEqual(
+            _ball_progress_mm(Vector2(0.5, 0.5), Vector2(0.55, 0.3), HOME),
+            0.05 * 1200.0,
+        )
 
 if __name__ == "__main__":
     unittest.main()
