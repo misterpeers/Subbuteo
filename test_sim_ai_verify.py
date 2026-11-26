@@ -4,11 +4,13 @@ import unittest
 
 from sim_ai_brain import FlickPlan, plan_team_flick_candidates
 from sim_ai_verify import (
+    DEAD_END_CATEGORY,
     REPEAT_CATEGORY,
     STEP_BACK_CATEGORY,
     FlickOutcome,
     _ball_progress_mm,
     _rank_key,
+    _select,
     has_next_contact,
     plan_verified_team_flick,
     simulate_flick,
@@ -65,6 +67,28 @@ class SimulateFlickTests(unittest.TestCase):
         self.assertTrue(outcome.goal)
         self.assertTrue(outcome.ball_contacted)
         self.assertTrue(outcome.keeps_possession)
+
+    def test_piece_on_the_centre_line_is_beaten_by_an_angled_shot(self) -> None:
+        """With the centre of the goal blocked, a shot aimed wider scores."""
+        world = _world(
+            [
+                _piece("home-1", HOME, Vector2(0.82, 0.5)),
+                _piece("away-1", AWAY, Vector2(0.97, 0.5)),
+            ],
+            Vector2(0.85, 0.5),
+        )
+
+        result = plan_verified_team_flick(
+            world,
+            HOME,
+            {"home-1": 0},
+            allow_sampling=False,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.outcome.goal)
+        self.assertEqual(result.plan.action, "shot")
+        self.assertNotAlmostEqual(result.plan.ball_target.y, 0.5)
 
     def test_simulation_leaves_the_original_world_untouched(self) -> None:
         """The world passed in is never modified by a what-if run."""
@@ -361,6 +385,8 @@ def _outcome(
     progress_mm: float = 0.0,
     goal: bool = False,
     forward_contact: bool = True,
+    dead_end: bool = False,
+    needs_shot_check: bool = False,
 ) -> FlickOutcome:
     """Create a possession-keeping outcome for ranking tests."""
     return FlickOutcome(
@@ -377,6 +403,8 @@ def _outcome(
         settled=True,
         ball_progress_mm=progress_mm,
         forward_contact_available=forward_contact,
+        dead_end=dead_end,
+        needs_shot_check=needs_shot_check,
     )
 
 
@@ -558,6 +586,223 @@ class RankingTests(unittest.TestCase):
             _ball_progress_mm(Vector2(0.5, 0.5), Vector2(0.55, 0.3), HOME),
             0.05 * 1200.0,
         )
+
+    def test_dead_end_ranks_after_a_repeat(self) -> None:
+        """A flick that stalls the attack ranks last of all."""
+        visited = [Vector2(0.5, 0.5)]
+        repeat = _rank_key(_ADVANCE, _outcome(Vector2(0.5, 0.5)), visited)
+        dead_end = _rank_key(
+            _ADVANCE,
+            _outcome(Vector2(0.6, 0.5), progress_mm=30.0, dead_end=True),
+            visited,
+        )
+
+        self.assertEqual(dead_end[0], DEAD_END_CATEGORY)
+        self.assertLess(repeat, dead_end)
+
+
+class _FixedChecker:
+    """Stand-in shot checker that always gives the same answer."""
+
+    def __init__(self, answer: bool) -> None:
+        """Store the answer and start counting calls.
+
+        Args:
+            answer: What ``scores_next`` returns.
+        """
+        self.answer = answer
+        self.calls = 0
+
+    def scores_next(self, plan: FlickPlan) -> bool:
+        """Return the fixed answer and count the call.
+
+        Args:
+            plan: The flick being checked; ignored.
+
+        Returns:
+            bool: The fixed answer.
+        """
+        self.calls += 1
+        return self.answer
+
+
+# Lone forward: home-1 is just behind the ball and both teammates are more
+# than a full flick (600 mm) from it.
+_LONE_PIECES = (
+    ("home-1", Vector2(0.60, 0.5)),
+    ("home-2", Vector2(0.05, 0.3)),
+    ("home-3", Vector2(0.05, 0.7)),
+)
+
+
+def _lone_forward_world(ball_x: float) -> PhysicsWorld:
+    """Return a world with a lone forward just behind the ball.
+
+    Args:
+        ball_x: Normalized X of the ball; the forward stands 24 mm behind it.
+
+    Returns:
+        PhysicsWorld: The test world.
+    """
+    pieces = [
+        _piece(
+            body_id,
+            HOME,
+            Vector2(ball_x - 0.02, 0.5) if body_id == "home-1" else position,
+        )
+        for body_id, position in _LONE_PIECES
+    ]
+    return _world(pieces, Vector2(ball_x, 0.5))
+
+
+class DeadEndTests(unittest.TestCase):
+    """Check the lone forward's dead end and the lookahead around it."""
+
+    def test_second_touch_short_of_the_area_is_a_dead_end(self) -> None:
+        """A lone piece left on its final touch outside the area stalls."""
+        world = _lone_forward_world(0.62)
+
+        outcome = simulate_flick(
+            world,
+            "home-1",
+            Vector2(0.62, 0.5),
+            0.15,
+            touch_counts={"home-1": 1},
+        )
+
+        self.assertTrue(outcome.keeps_possession)
+        self.assertFalse(outcome.ball_in_shooting_area)
+        self.assertTrue(outcome.dead_end)
+        self.assertFalse(outcome.needs_shot_check)
+
+    def test_first_touch_is_not_a_dead_end(self) -> None:
+        """With two touches still to come the piece is not yet stuck."""
+        world = _lone_forward_world(0.62)
+
+        outcome = simulate_flick(
+            world,
+            "home-1",
+            Vector2(0.62, 0.5),
+            0.15,
+            touch_counts={"home-1": 0},
+        )
+
+        self.assertFalse(outcome.dead_end)
+
+    def test_teammate_in_range_prevents_a_dead_end(self) -> None:
+        """A final touch can still pass to a teammate within flick range."""
+        world = _world(
+            [
+                _piece("home-1", HOME, Vector2(0.60, 0.5)),
+                _piece("home-2", HOME, Vector2(0.40, 0.5)),
+            ],
+            Vector2(0.62, 0.5),
+        )
+
+        outcome = simulate_flick(
+            world,
+            "home-1",
+            Vector2(0.62, 0.5),
+            0.15,
+            touch_counts={"home-1": 1},
+        )
+
+        self.assertFalse(outcome.dead_end)
+
+    def test_second_touch_inside_the_area_needs_a_shot_check(self) -> None:
+        """Inside the area the final touch may still score, so it is checked."""
+        world = _lone_forward_world(0.82)
+
+        outcome = simulate_flick(
+            world,
+            "home-1",
+            Vector2(0.82, 0.5),
+            0.15,
+            touch_counts={"home-1": 1},
+        )
+
+        self.assertTrue(outcome.ball_in_shooting_area)
+        self.assertFalse(outcome.dead_end)
+        self.assertTrue(outcome.needs_shot_check)
+
+    def test_failed_shot_check_demotes_the_flick(self) -> None:
+        """A flick whose final touch cannot score loses to any other move."""
+        checked = _rank_key(
+            _ADVANCE,
+            _outcome(Vector2(0.8, 0.5), progress_mm=30.0, needs_shot_check=True),
+        )
+        back = _rank_key(
+            _ADVANCE,
+            _outcome(Vector2(0.4, 0.5), progress_mm=-80.0),
+        )
+        entries = [
+            (checked, _ADVANCE, _outcome(Vector2(0.8, 0.5), needs_shot_check=True)),
+            (back, _ADVANCE, _outcome(Vector2(0.4, 0.5), progress_mm=-80.0)),
+        ]
+
+        chosen = _select(entries, _FixedChecker(False), DEAD_END_CATEGORY)
+
+        self.assertIsNotNone(chosen)
+        self.assertEqual(chosen[0], back)
+
+    def test_passed_shot_check_keeps_the_flick(self) -> None:
+        """A flick whose final touch can score keeps its normal rank."""
+        checked = _rank_key(
+            _ADVANCE,
+            _outcome(Vector2(0.8, 0.5), progress_mm=30.0, needs_shot_check=True),
+        )
+        checker = _FixedChecker(True)
+
+        chosen = _select(
+            [
+                (
+                    checked,
+                    _ADVANCE,
+                    _outcome(Vector2(0.8, 0.5), needs_shot_check=True),
+                ),
+            ],
+            checker,
+            DEAD_END_CATEGORY,
+        )
+
+        self.assertEqual(chosen[0], checked)
+        self.assertEqual(checker.calls, 1)
+
+    def test_only_failed_checks_left_is_reported_as_a_dead_end(self) -> None:
+        """With nothing else available the failed flick is kept, ranked last."""
+        checked = _rank_key(
+            _ADVANCE,
+            _outcome(Vector2(0.8, 0.5), needs_shot_check=True),
+        )
+
+        chosen = _select(
+            [
+                (
+                    checked,
+                    _ADVANCE,
+                    _outcome(Vector2(0.8, 0.5), needs_shot_check=True),
+                ),
+            ],
+            _FixedChecker(False),
+            DEAD_END_CATEGORY,
+        )
+
+        self.assertEqual(chosen[0][0], DEAD_END_CATEGORY)
+
+    def test_lone_forward_second_touch_reaches_the_shooting_area(self) -> None:
+        """Far from the area, touch 2 carries the ball in instead of stalling.
+
+        The ball starts 176 mm short of the shooting line, beyond the reach of
+        a short planned advance or the usual sampled strengths, as in harness
+        seed 69.
+        """
+        world = _lone_forward_world(0.62)
+
+        result = plan_verified_team_flick(world, HOME, {"home-1": 1})
+
+        self.assertIsNotNone(result)
+        self.assertFalse(result.outcome.dead_end)
+        self.assertTrue(result.outcome.ball_in_shooting_area)
 
 if __name__ == "__main__":
     unittest.main()

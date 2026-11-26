@@ -7,7 +7,7 @@ happened. Nothing here changes the world it is given.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import sqrt
 
 from sim_ai_brain import (
@@ -43,10 +43,14 @@ STEP_BACK_MM = 50.0
 STEP_BACK_CATEGORY = 4
 REPEAT_CATEGORY = 5
 REPEAT_RADIUS_MM = 8.0
+DEAD_END_CATEGORY = 6
+MAX_SHOT_CHECKS = 3
+LONG_SAMPLE_STRENGTHS = (0.5, 0.7, 0.9)
 LEVEL_GOAL = 0
 LEVEL_ADVANCE = 1
 LEVEL_STEP_BACK = 2
 LEVEL_REPEAT = 3
+LEVEL_DEAD_END = 4
 
 
 @dataclass(frozen=True)
@@ -100,6 +104,17 @@ class FlickOutcome:
         forward_contact_available: Whether such a teammate also stands behind
             the ball, so its next flick can push the ball toward the attacked
             goal.
+        dead_end: Whether the flick leaves the attack with no way to go on
+            after one more touch: it did not score, the ball stopped outside
+            the shooting area, the flicking piece kept the ball and will have
+            only its final touch left, and no other piece of the team is
+            within flick range of the ball. That final touch can then neither
+            shoot nor pass, so the attack would stall.
+        needs_shot_check: Whether the flick leaves the flicking piece alone
+            on its final touch, as for ``dead_end``, but with the ball inside
+            the shooting area. The attack then goes on only if that final
+            touch can score, which the chooser checks by looking one flick
+            ahead.
     """
 
     flick_applied: bool
@@ -117,6 +132,8 @@ class FlickOutcome:
     ball_progress_mm: float = 0.0
     next_contact_available: bool = True
     forward_contact_available: bool = True
+    dead_end: bool = False
+    needs_shot_check: bool = False
 
     @property
     def keeps_possession(self) -> bool:
@@ -183,6 +200,73 @@ def _path_is_blocked(
     return distance < piece.radius_mm + other.radius_mm
 
 
+def _within_flick_range(piece: Body, ball: Body) -> bool:
+    """Return whether a full-strength flick could carry a piece to the ball.
+
+    Other pieces in the way are ignored.
+
+    Args:
+        piece: The piece that would flick.
+        ball: The ball.
+
+    Returns:
+        bool: ``True`` if the edge-to-edge gap can be covered by a flick of
+            at most full strength.
+    """
+    gap = max(
+        0.0,
+        distance_between_mm(piece.position, ball.position)
+        - piece.radius_mm
+        - ball.radius_mm,
+    )
+    return sqrt(2.0 * PIECE_FRICTION_MM_S2 * gap) <= MAX_FLICK_SPEED_MM_S
+
+
+def _is_isolated_final_touch(
+    world: PhysicsWorld,
+    team: str,
+    piece_id: str,
+    touches_after_flick: int,
+    receiver_id: str | None,
+    goal: bool,
+) -> bool:
+    """Return whether a settled flick leaves one piece alone on its last touch.
+
+    Only one piece can be partway through its consecutive touches, because a
+    different piece touching the ball resets the previous piece's count. This
+    is true when that piece kept the ball, will be on its final touch, and no
+    other piece of the team is within flick range of the ball, so the final
+    touch cannot be a pass. The attack can then only go on with a goal: the
+    caller treats the flick as a dead end when the ball is outside the
+    shooting area, and checks for a scoring shot when it is inside.
+
+    Args:
+        world: The settled trial world after the flick.
+        team: The attacking team.
+        piece_id: The piece that flicked.
+        touches_after_flick: That piece's consecutive touches including this
+            flick.
+        receiver_id: The teammate the ball reached, if any; a pass resets the
+            flicking piece's count, so it is never a dead end.
+        goal: Whether the flick scored.
+
+    Returns:
+        bool: ``True`` if the piece is left alone on its final touch.
+    """
+    if goal or receiver_id is not None:
+        return False
+    if touches_after_flick != MAX_CONSECUTIVE_TOUCHES - 1:
+        return False
+    return not any(
+        _within_flick_range(body, world.ball)
+        for body in world.pieces
+        if body.team == team
+        and body.movable
+        and body.kind == "piece"
+        and body.body_id != piece_id
+    )
+
+
 def has_next_contact(
     world: PhysicsWorld,
     piece_ids: list[str],
@@ -224,8 +308,7 @@ def has_next_contact(
         if distance == 0.0:
             continue
         reach = piece.radius_mm + ball.radius_mm
-        gap = max(0.0, distance - reach)
-        if sqrt(2.0 * PIECE_FRICTION_MM_S2 * gap) > MAX_FLICK_SPEED_MM_S:
+        if not _within_flick_range(piece, ball):
             continue
         contact_point = (
             ball_x - to_ball_x / distance * reach,
@@ -296,6 +379,33 @@ def simulate_flick(
         ValueError: If the piece is unknown or has no team, or the strength is
             outside 0.0 to 1.0.
     """
+    return _run_flick(world, piece_id, piece_target, strength, touch_counts)[0]
+
+
+def _run_flick(
+    world: PhysicsWorld,
+    piece_id: str,
+    piece_target: Vector2,
+    strength: float,
+    touch_counts: dict[str, int] | None = None,
+) -> tuple[FlickOutcome, PhysicsWorld]:
+    """Simulate one flick on a clone and return its result and the clone.
+
+    Args:
+        world: The current world; it is not modified.
+        piece_id: Identifier of the flicking player piece.
+        piece_target: Normalized point the piece is flicked toward.
+        strength: Flick strength from 0.0 to 1.0.
+        touch_counts: Consecutive touches already used by each piece.
+
+    Returns:
+        tuple[FlickOutcome, PhysicsWorld]: What the flick did, and the cloned
+            world as it stood when the simulation stopped.
+
+    Raises:
+        ValueError: If the piece is unknown or has no team, or the strength is
+            outside 0.0 to 1.0.
+    """
     trial = world.clone()
     piece = next(
         (body for body in trial.pieces if body.body_id == piece_id),
@@ -315,7 +425,7 @@ def simulate_flick(
     )
     applied = flick_toward_target(trial, piece_id, piece_target, strength)
     if not applied:
-        return FlickOutcome(
+        outcome = FlickOutcome(
             flick_applied=False,
             ball_contacted=False,
             opponent_contact=False,
@@ -328,6 +438,7 @@ def simulate_flick(
             teammate_gap_mm=None,
             settled=True,
         )
+        return outcome, trial
 
     teams = {body.body_id: body.team for body in trial.pieces}
     opponent_contact = False
@@ -391,7 +502,16 @@ def simulate_flick(
         - trial.ball.radius_mm
         for body in next_pieces
     ]
-    return FlickOutcome(
+    in_area = _in_shooting_area(ball_position, team)
+    final_touch_alone = _is_isolated_final_touch(
+        trial,
+        team,
+        piece_id,
+        counts.get(piece_id, 0) + 1,
+        receiver_id,
+        goal,
+    )
+    outcome = FlickOutcome(
         flick_applied=True,
         ball_contacted=contacted,
         opponent_contact=opponent_contact,
@@ -400,7 +520,7 @@ def simulate_flick(
         receiver_id=receiver_id,
         ball_position=ball_position,
         ball_travel_mm=distance_between_mm(ball_start, ball_position),
-        ball_in_shooting_area=_in_shooting_area(ball_position, team),
+        ball_in_shooting_area=in_area,
         teammate_gap_mm=max(0.0, min(gaps)) if gaps else None,
         settled=settled,
         touched_piece_before_ball=touched_piece_before_ball,
@@ -413,7 +533,10 @@ def simulate_flick(
             [body.body_id for body in next_pieces],
             behind_ball_for=attack_direction(team),
         ),
+        dead_end=final_touch_alone and not in_area,
+        needs_shot_check=final_touch_alone and in_area,
     )
+    return outcome, trial
 
 
 def simulate_plan(
@@ -478,13 +601,17 @@ def _rank_key(
     A flick that moves the ball more than ``STEP_BACK_MM`` toward the team's
     own goal is a deliberate step back, and a flick that returns the ball to
     where it has already stopped in this attack is a repeat. Both rank after
-    every other flick, the repeat last. Within a category, a flick that leaves
+    every other flick, the repeat after the step back. A dead end (see
+    ``FlickOutcome.dead_end``) ranks last of all, because the attack would
+    stall after one more touch. Within a category, a flick that leaves
     a teammate behind the ball is preferred, then a ball that stops within
     safe reach of a teammate, then lower flick strength, then shorter ball
     travel.
     """
     if outcome.goal:
         category = 0
+    elif outcome.dead_end:
+        category = DEAD_END_CATEGORY
     elif _is_repeat(outcome, visited_ball_positions):
         category = REPEAT_CATEGORY
     elif outcome.ball_progress_mm < -STEP_BACK_MM:
@@ -519,6 +646,8 @@ def _planned_level(category: int) -> int:
     """
     if category == 0:
         return LEVEL_GOAL
+    if category == DEAD_END_CATEGORY:
+        return LEVEL_DEAD_END
     if category == REPEAT_CATEGORY:
         return LEVEL_REPEAT
     if category == STEP_BACK_CATEGORY:
@@ -544,15 +673,23 @@ def plan_verified_team_flick(
     lose possession, or leave no teammate a clear next contact with the ball
     are rejected, and the search stops at the first candidate that scores.
 
-    Planned and exploratory flicks share four quality levels: a goal; a
+    Planned and exploratory flicks share five quality levels: a goal; a
     forward or sideways move; a step back, which moves the ball more than
-    ``STEP_BACK_MM`` toward the team's own goal; and a repeat, which returns
+    ``STEP_BACK_MM`` toward the team's own goal; a repeat, which returns
     the ball within ``REPEAT_RADIUS_MM`` of a position where it has already
-    stopped in this attack. If no planned flick survives, or the best one is
-    a step back or a repeat, exploratory flicks around the ball are simulated
+    stopped in this attack; and a dead end, which leaves the piece on its
+    final touch outside the shooting area with no teammate in range. If no
+    planned flick survives, or the best one is a step back, a repeat or a
+    dead end, exploratory flicks around the ball are simulated
     too, and the one on the better level is used, the planned flick on a tie.
     Exploratory flicks can find forward, sideways or backward moves the
-    planner does not propose.
+    planner does not propose. If nothing better than a dead end exists, the
+    exploratory contacts are tried once more at the stronger
+    ``LONG_SAMPLE_STRENGTHS``, which can carry the ball into the shooting
+    area. A flick that leaves a lone piece on its final touch inside the
+    shooting area is used only if a look one flick ahead finds a scoring
+    shot (at most ``MAX_SHOT_CHECKS`` looks per decision); otherwise it
+    counts as a dead end.
 
     Args:
         world: The current world; it is not modified.
@@ -588,26 +725,26 @@ def plan_verified_team_flick(
         attack_direction=attack_direction(team),
     )[:max_candidates]
 
-    best: (
-        tuple[tuple[int, int, int, float, float], FlickPlan, FlickOutcome]
-        | None
-    ) = None
+    checker = _ShotChecker(world, team, touch_counts, obstacles)
+    planned: list[_Ranked] = []
     tried = 0
     for plan in candidates:
         outcome = simulate_plan(world, plan, touch_counts)
         tried += 1
         if not outcome.keeps_possession or not outcome.next_contact_available:
             continue
-        key = _rank_key(plan, outcome, visited_ball_positions)
-        if best is None or key < best[0]:
-            best = (key, plan, outcome)
+        planned.append(
+            (_rank_key(plan, outcome, visited_ball_positions), plan, outcome)
+        )
         if outcome.goal:
             break
 
+    best = _select(planned, checker, DEAD_END_CATEGORY)
+    planned_level = LEVEL_DEAD_END + 1
     if best is not None:
         planned_level = _planned_level(best[0][0])
         if not allow_sampling or planned_level <= LEVEL_ADVANCE:
-            return VerifiedFlick(best[1], best[2], tried)
+            return VerifiedFlick(best[1], best[2], tried + checker.simulated)
     if not allow_sampling:
         return None
 
@@ -618,18 +755,143 @@ def plan_verified_team_flick(
         obstacles,
         max_sampled_candidates,
         visited_ball_positions,
+        checker,
     )
-    if best is not None and (sampled is None or sampled[3] >= planned_level):
-        extra = sampled[2] if sampled is not None else 0
-        return VerifiedFlick(best[1], best[2], tried + extra)
+    extra = sampled[2] if sampled is not None else 0
+    sampled_level = sampled[3] if sampled is not None else LEVEL_DEAD_END + 1
+    if min(planned_level, sampled_level) >= LEVEL_DEAD_END:
+        long_sampled = _best_sampled_flick(
+            world,
+            attackers,
+            touch_counts,
+            obstacles,
+            max_sampled_candidates,
+            visited_ball_positions,
+            checker,
+            strengths=LONG_SAMPLE_STRENGTHS,
+        )
+        if long_sampled is not None:
+            extra += long_sampled[2]
+            if long_sampled[3] < sampled_level:
+                sampled = long_sampled
+                sampled_level = long_sampled[3]
+    tried += extra + checker.simulated
+    if best is not None and (sampled is None or sampled_level >= planned_level):
+        return VerifiedFlick(best[1], best[2], tried)
     if sampled is None:
         return None
-    return VerifiedFlick(
-        sampled[0],
-        sampled[1],
-        tried + sampled[2],
-        source="sampled",
-    )
+    return VerifiedFlick(sampled[0], sampled[1], tried, source="sampled")
+
+
+_Ranked = tuple[tuple[int, int, int, float, float], FlickPlan, FlickOutcome]
+
+
+class _ShotChecker:
+    """Look one flick ahead to see whether a lone piece's final touch scores.
+
+    A flick that leaves the flicking piece alone on its final touch inside
+    the shooting area (``FlickOutcome.needs_shot_check``) keeps the attack
+    going only if that final touch can score. The checker simulates the flick,
+    then plans the next one on the settled result and reports whether it is a
+    goal. Each check is a full planning run, so a decision has a small budget
+    of checks; once it is spent, unchecked flicks are treated as dead ends.
+
+    Attributes:
+        simulated: Flicks simulated by all checks so far, for statistics.
+    """
+
+    def __init__(
+        self,
+        world: PhysicsWorld,
+        team: str,
+        touch_counts: dict[str, int],
+        obstacles: list[Obstacle] | None,
+        budget: int = MAX_SHOT_CHECKS,
+    ) -> None:
+        """Create a checker for one decision.
+
+        Args:
+            world: The current world; it is not modified.
+            team: The attacking team.
+            touch_counts: Consecutive touches already used by each piece.
+            obstacles: Areas the planner should avoid.
+            budget: Most lookahead checks allowed.
+        """
+        self._world = world
+        self._team = team
+        self._touch_counts = touch_counts
+        self._obstacles = obstacles
+        self._budget = budget
+        self.simulated = 0
+
+    def scores_next(self, plan: FlickPlan) -> bool:
+        """Return whether the touch after a planned flick can score.
+
+        Args:
+            plan: A flick whose outcome needs a shot check.
+
+        Returns:
+            bool: ``True`` if the planner finds a verified goal after the
+                flick; ``False`` if it does not, or the budget is spent.
+        """
+        if self._budget <= 0 or plan.flicking_piece_id is None:
+            return False
+        self._budget -= 1
+        piece_id = plan.flicking_piece_id
+        _, trial = _run_flick(
+            self._world,
+            piece_id,
+            plan.piece_target,
+            plan.strength,
+            self._touch_counts,
+        )
+        self.simulated += 1
+        counts = dict(self._touch_counts)
+        counts[piece_id] = counts.get(piece_id, 0) + 1
+        result = plan_verified_team_flick(
+            trial,
+            self._team,
+            counts,
+            self._obstacles,
+        )
+        if result is None:
+            return False
+        self.simulated += result.candidates_tried
+        return result.outcome.goal
+
+
+def _select(
+    entries: list[_Ranked],
+    checker: _ShotChecker,
+    dead_end_head: int,
+) -> _Ranked | None:
+    """Return the best ranked flick, checking lone final touches for a shot.
+
+    Entries are taken in rank order. One that needs a shot check is used only
+    if the checker confirms the next touch scores; otherwise it is kept aside
+    as a dead end.
+
+    Args:
+        entries: Verified flicks with their rank keys.
+        checker: The decision's shot checker.
+        dead_end_head: First key element that marks a dead end for this kind
+            of rank key.
+
+    Returns:
+        _Ranked | None: The best usable entry; failing that, the best entry
+            that failed its shot check, re-keyed as a dead end; or ``None`` if
+            there are no entries.
+    """
+    failed: list[_Ranked] = []
+    for entry in sorted(entries, key=lambda item: item[0]):
+        if entry[2].needs_shot_check and not checker.scores_next(entry[1]):
+            failed.append(entry)
+            continue
+        return entry
+    if not failed:
+        return None
+    key, plan, outcome = failed[0]
+    return (dead_end_head, *key[1:]), plan, outcome
 
 
 def _sampled_rank_key(
@@ -644,7 +906,8 @@ def _sampled_rank_key(
     shooting area, which covers a deliberate step back or sideways. Among
     flicks on the same tier, one that leaves a teammate behind the ball is
     preferred, so a step back sets up a forward move. A flick that returns the
-    ball to a position where it has already stopped ranks last.
+    ball to a position where it has already stopped ranks next to last, and a
+    dead end (see ``FlickOutcome.dead_end``) ranks last.
     """
     near_teammate = (
         outcome.teammate_gap_mm is not None
@@ -652,6 +915,8 @@ def _sampled_rank_key(
     )
     if outcome.goal:
         tier = 0
+    elif outcome.dead_end:
+        tier = 4
     elif _is_repeat(outcome, visited_ball_positions):
         tier = 3
     elif outcome.ball_progress_mm >= MIN_SAMPLED_PROGRESS_MM:
@@ -684,6 +949,8 @@ def _sampled_level(
     """
     if key[0] == 0:
         return LEVEL_GOAL
+    if key[0] == 4:
+        return LEVEL_DEAD_END
     if key[0] == 3:
         return LEVEL_REPEAT
     if outcome.ball_progress_mm < -STEP_BACK_MM:
@@ -698,6 +965,9 @@ def _best_sampled_flick(
     obstacles: list[Obstacle] | None,
     max_candidates: int,
     visited_ball_positions: Sequence[Vector2] = (),
+    checker: _ShotChecker | None = None,
+    *,
+    strengths: Sequence[float] | None = None,
 ) -> tuple[FlickPlan, FlickOutcome, int, int] | None:
     """Simulate exploratory flicks and return the best.
 
@@ -708,31 +978,47 @@ def _best_sampled_flick(
         obstacles: Areas a piece's path to the ball must avoid.
         max_candidates: Most exploratory flicks to simulate.
         visited_ball_positions: Earlier ball stop positions in this attack.
+        checker: The decision's shot checker; a new one is made if omitted.
+        strengths: When given, the sampled contact points are flicked at
+            these strengths instead of the usual ones. Used for the long
+            reach pass that runs only when nothing better than a dead end
+            exists.
 
     Returns:
         tuple | None: The plan, its outcome, the number of flicks simulated
             and the plan's shared quality level, or ``None`` if no exploratory
             flick is worthwhile.
     """
+    if checker is None:
+        team = attackers[0].team if attackers else None
+        checker = _ShotChecker(world, team or "", touch_counts, obstacles)
     candidates: list[FlickPlan] = []
     for piece in attackers:
         if touch_counts.get(piece.body_id, 0) >= MAX_CONSECUTIVE_TOUCHES:
             continue
+        sampled = sample_flick_candidates(
+            piece.body_id,
+            piece.position,
+            world.ball.position,
+            obstacles,
+        )
+        if strengths is None:
+            candidates.extend(sampled)
+            continue
+        if not sampled:
+            continue
+        weakest = sampled[0].strength
+        contacts = [plan for plan in sampled if plan.strength == weakest]
         candidates.extend(
-            sample_flick_candidates(
-                piece.body_id,
-                piece.position,
-                world.ball.position,
-                obstacles,
-            )
+            replace(plan, strength=strength)
+            for strength in strengths
+            if strength > weakest
+            for plan in contacts
         )
     candidates.sort(key=lambda plan: plan.strength)
     candidates = candidates[:max_candidates]
 
-    best: (
-        tuple[tuple[int, int, int, float, float], FlickPlan, FlickOutcome]
-        | None
-    ) = None
+    entries: list[_Ranked] = []
     tried = 0
     for plan in candidates:
         outcome = simulate_plan(world, plan, touch_counts)
@@ -742,10 +1028,10 @@ def _best_sampled_flick(
         key = _sampled_rank_key(plan, outcome, visited_ball_positions)
         if key is None:
             continue
-        if best is None or key < best[0]:
-            best = (key, plan, outcome)
+        entries.append((key, plan, outcome))
         if outcome.goal:
             break
+    best = _select(entries, checker, 4)
     if best is None:
         return None
     return best[1], best[2], tried, _sampled_level(best[0], best[2])

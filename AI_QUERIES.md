@@ -30,14 +30,14 @@ you. The last column says what is waiting on each one.
 | Q4 | Goalkeeper saves | Answered | Nothing (placeholder) |
 | Q5 | Teammate contact and fouls | Answered | Nothing |
 | Q6 | Clear shooting and passing lanes | Answered: simulate and see, for now | Nothing |
-| Q7 | Bank shots | Answered: only when no direct shot or pass works | Attacker tuning (step 3) |
+| Q7 | Bank shots | Answered: only when no direct shot or pass works; more bank shots with higher intelligence (traits stage, T1) | Step 3 |
 | Q8 | Setup-pass validity | Answered; optional numeric rule is Q20 | Nothing |
 | Q9 | Block-flick timing | Answered; strength cap is Q15 and skipping is Q14 | Defenders |
 | Q10 | Formation Y-coordinates | Answered: even spacing, for now | Nothing |
 | Q11 | Goalkeeper collision thickness | **Open** | Goalkeeper work |
 | Q12 | Same-time-of-contact tie-break | Answered: defending piece wins | Nothing |
-| Q13 | Defenders near the goal and shooting area | **Open** | Defenders |
-| Q14 | Defender skipping a move on purpose | **Open** | Defenders |
+| Q13 | Defenders near the goal and shooting area | Answered: outside scoring areas at kick-off, anywhere during play; follow-up Q24 | Nothing |
+| Q14 | Defender skipping a move on purpose | Answered: an intelligence trait, 0 to 1; skipping is a smart choice; follow-up Q25 | Nothing |
 | Q15 | Strength cap for a block-flick | Answered: context-based, option A in Q22 | Nothing |
 | Q16 | What counts as "displacing" defenders (smashing) | Answered: 5 mm, for now | Nothing |
 | Q17 | No-move fallback, repositioning and runaway attacks | Answered (part 2 settled by Q21) | Nothing |
@@ -47,9 +47,17 @@ you. The last column says what is waiting on each one.
 | Q21 | What a stuck attacker may do in a match | Answered: a block-flick move, then possession changes | Nothing |
 | Q22 | How a context-based block-flick cap works | Answered: option A; prefer the piece closest to the ball | Nothing |
 | Q23 | Which 5-a-side formation for the first match | Answered: 2-2 for both teams, for now | Nothing |
+| Q24 | Defender placement in drills and at the goal | Answered: anywhere in the editor; pieces never enter the net | Nothing |
+| Q25 | How intelligence decides whether to move | Answered for the traits stage; point 2 continues in Q27 | Traits stage |
+| Q26 | A risk trait for the step 3 longer-move setting | Answered: yes, at the traits stage (T2); step 3 uses one fixed rule | Nothing |
+| Q27 | Step 4 defenders without traits: when to skip | Answered: never skip until traits exist | Nothing |
+| Q28 | A defender that always moves: edge cases | Answered: block the next route with another piece; no move only if no legal block | Nothing |
+| Q29 | When should an advance move the ball further? | Answered: a standard balanced style; styles later; guard against defenders getting between (Q30) | Nothing |
+| Q30 | The balanced advance rule | Answered: as proposed, possession first, progress up to 100 mm | Nothing |
+| T1 to T13, G1 to G4 | Player traits log | Later: review at the traits stage | Traits stage |
 
-Most useful to answer first: **Q13 and Q14** (defenders, step 4), then **Q11**
-(goalkeeper). Q20 is optional. Nothing blocks step 2, the next piece of work.
+Most useful to answer next: **Q11** (goalkeeper). Q20 is optional. Nothing else blocks step 3 or step 4. Nothing blocks step 3. The traits log (T1 to
+T13, G1 to G4) waits for the traits stage, after the full match.
 
 ## Questions
 
@@ -161,6 +169,14 @@ passes, or only use a bank shot when a direct route is blocked?
 > deliberate option, and if so, only when the direct route is blocked, or
 > compared with direct shots whenever both are available?
 
+**Additional response: In line with incorporating an intelligence trait to the AI player I would expect a player with high intelligence to try bank shots more over a player with lower intelligence.**
+
+> **AI note:** Recorded for the player traits stage (see T1 under "Player
+> traits (later stage)"). No code needs changing now: bank shots are not built
+> yet. Step 3 builds them for equal AI players under the rule above (only when
+> no direct shot or pass survives simulation), with that trigger kept as one
+> named setting so a trait can widen it later.
+
 ### Q8 — Setup-pass validity
 
 What makes a setup pass distinct from an ordinary short pass? Must it travel a
@@ -236,7 +252,12 @@ may it fully block the mouth? The suggested default is yes, anywhere on the
 pitch except overlapping another piece, so the drill shows whether the attacker
 can still find a lane.
 
-**Your response: TBD** 
+**Your response: If by this you mean from "kick off" then no, all pieces must be outside their respective scoring areas, in linw with their formations. However, during play a defending player piece can go wherever on the pitch it needs to.** 
+
+> **AI note:** Recorded. At kick-off every field piece stays outside the
+> scoring areas, in its formation (this already matches the rules). During
+> play a defending piece may go anywhere, including the shooting area and in
+> front of the goal mouth. Two small follow-ups are in Q24.
 
 ### Q14 — A defender skipping a move on purpose
 
@@ -246,7 +267,15 @@ chance of skipping each response, or a fixed list of settings such as
 "always responds", "sometimes responds" and "rarely responds". Should the
 choice be random (with a fixed seed so runs repeat) or follow a rule?
 
-**Your response: TBD** 
+**Your response: Long term I think the skill value will be 0 to 1 (or 0 to 100), think how the old FIFA computer games would rank their players/teams. Something along those lines. Long term strategy is the AI player will have several traits, one of which will impact on decisions like this. Call it intelligence or something akin. I would want the AI player to make this decision based on intelligent strategy (do I need to move, or am I already in a good position?) A higher intelligence skill would favour this kind of decision making over a lower intelligence skill that is more likely to always move.** 
+
+> **AI note:** Recorded. Each AI player will have traits; the first is
+> **intelligence**, from 0 to 1 (0 to 100 when shown). Skipping the
+> block-flick is a smart choice, not a weakness: a player with high
+> intelligence asks "am I already in a good position?" and skips when it is,
+> while a player with low intelligence tends to move anyway. The details
+> needed to build this are in Q25, and how the step 3 risk setting fits
+> alongside it is in Q26.
 
 ### Q15 — Strength cap for a block-flick
 
@@ -389,3 +418,362 @@ is symmetrical and easiest to check.
 
 > **AI note:** Recorded: 2-2 (square/box) for both teams, with even Y spacing,
 > to review in testing.
+
+### Q24 — Defender placement in drills and at the goal (follow-up to Q13)
+
+1. **Training drill start:** a training drill begins in the middle of play,
+   not at kick-off. May you place (drag) a defender anywhere in the editor,
+   including inside the shooting area and right in front of the goal mouth?
+   Suggested default: yes, anywhere that does not overlap another piece.
+2. **Field pieces and the net:** today a player piece treats the whole goal
+   line as a wall, including the goal mouth, so only the ball can enter the
+   net. A defender can therefore stand on the goal line in front of the mouth
+   but not inside the goal. One piece (18.5 mm) cannot close the 120 mm
+   mouth on its own, but several could, until the goalkeeper exists. Keep
+   this? Suggested default: yes, field pieces never enter the net.
+
+**Your response: 1) Yes, allow user movement anywhere. 2) Yes, player pieces should not enter the net, only the ball.**
+
+> **AI note:** Recorded: (1) in the training editor, defenders may be placed
+> anywhere that does not overlap another piece; (2) player pieces never enter
+> the net (the physics already works this way), only the ball.
+
+### Q25 — How intelligence decides whether to move (follow-up to Q14)
+
+To build the "do I need to move?" decision:
+
+1. **Scale:** store intelligence as 0.0 to 1.0 in code and show it as 0 to
+   100 in any display. Suggested default: yes.
+2. **"Already in a good position":** suggested default: a defending piece
+   already sits across the route that the block would protect, that is the
+   straight line from the ball to the goal-mouth center when the ball is in
+   or near the shooting area, otherwise the line from the ball to the nearest
+   uncontrolled attacking piece. "Across" means the piece's base overlaps the
+   ball's path (centre within 20.25 mm of the line, the piece and ball radii
+   added). This is a quick geometric test. The alternative is to simulate the
+   attacker's best shot or pass and see whether it is stopped, which is more
+   accurate but slower.
+3. **How intelligence turns into a choice:** suggested default: when already
+   in a good position, the player skips with a probability equal to its
+   intelligence (1.0 always skips, 0.0 always moves), drawn from a seeded
+   random generator so harness runs repeat exactly. When not in a good
+   position, every player moves. The alternative is a fixed rule with no
+   randomness (for example, skip only when intelligence is at least 0.5).
+4. **Other effects of low intelligence:** should low intelligence also make
+   worse choices for now (less accurate block positions, a poorer choice of
+   piece)? Suggested default: no; for now it affects only the skip decision,
+   and other effects come with later traits.
+5. **Starting value:** suggested default: both teams at 1.0 in training and
+   the harness, so the first defender results show the best defending; other
+   values are compared later.
+
+**Your response: 1) Yes, 0.0 to 1.0 in the code is good, 0 to 100 for display is better for visual pleasing. 2) My gut says the default as having the AI player simulate an attackers best shot might cause lower scoring games, however this may be counteracted by the introduction of player traits which would de-level the playing field if that makes sense. 3) your default sounds logical for now, testing will confirm. 4) Agreed, I think for now lets concentrate on AI players being equal. 5) As per 5, make all players the same intelligence, at this point we're not introducing any traits, that will follow later. **
+
+> **AI note:** Recorded: (1) 0.0 to 1.0 in code, 0 to 100 on screen;
+> (3) skip with probability equal to intelligence, seeded, for the traits
+> stage; (4) and (5) all AI players equal until then, with no traits. Point
+> (2) needs one clarification, asked in Q27: the "good position" test only
+> decides whether the defender skips its move; it does not change how well a
+> moving defender blocks, so on its own it should not lower scoring much.
+> Until traits exist, equal players behave as if intelligence were 1.0.
+
+### Q26 — Traits for the attacker and the step 3 risk setting
+
+Step 3 adds a setting that allows longer moves when the lane is clear, and
+Q17 mentioned riskier styles of play as a later per-team option. Should this
+be a second trait next to intelligence, for example **risk** (0 to 1:
+cautious to bold), kept together with intelligence in one per-team trait
+profile so later traits fit in the same place? Suggested default: yes, a
+`risk` trait with a middle default of 0.5. In step 3 it would decide how far
+an advance may move the ball when no opposing piece is near; how it affects
+riskier flicks that may lose possession is left for later.
+
+**Your response: Yes, this is good. Perhaps compile a list of other similar traits and how they correlate to the simulator. When we reach this stage we can run through and keep/remove each trait accordingly.**
+
+> **AI note:** Recorded. You later decided that traits are a stage of their
+> own, after a full match works with equal AI players. So step 3 adds no
+> `risk` trait: longer moves use one fixed rule for both teams, kept as a
+> named setting that a `risk` trait can drive later (T2). The list of
+> possible traits is under "Player traits (later stage)" below.
+
+### Q27 — Step 4 defenders without traits: when to skip
+
+Traits come later, so in step 4 both AI players are equal and behave like
+intelligence 1.0. That means a defender skips its block-flick whenever it is
+already in a good position, with no randomness, and moves otherwise.
+
+On Q25 point 2: the "good position" test only decides **whether** to skip.
+When the defender moves, it picks its blocking spot the same way under either
+test. So the test choice mostly affects how often defenders sit still, not
+how many goals are scored.
+
+1. Is "skip whenever already in a good position" right for equal players in
+   step 4? Suggested default: yes.
+2. Which test? Suggested default: the quick geometric test (a defending piece
+   already sits across the line from the ball to the goal mouth, or to the
+   nearest unmarked attacker). The slower simulation test is kept in the
+   traits log as something a high-intelligence player might use (T1).
+
+**Your response: I think in the absence of a trait system a defender should never choose to skip. For the demo I'm not looking to test intelligence yet. That comes once we have a fully working full match.**
+
+> **AI note:** Recorded: until traits exist, a defender never chooses to
+> skip; it always makes a block-flick. The "good position" test is therefore
+> not needed in step 4 and moves to the traits stage (T1). Two edge cases
+> follow in Q28.
+
+### Q28 — A defender that always moves: edge cases (follow-up to Q27)
+
+1. **Already blocking:** a defending piece already sits across the shot line
+   (or the pass lane). It must still move. Suggested default: it blocks the
+   next most useful route with a different piece, for example the pass lane
+   to the nearest unmarked attacker, rather than nudging the piece that is
+   already in place.
+2. **No legal block exists:** no defending piece can reach a blocking spot
+   within its strength cap without touching the ball or an attacking piece.
+   Any move would then risk an illegal block-flick, which resets the
+   attacker's touch counts. Suggested default: in that case only, the
+   defender does not move. This is forced, not a choice, so it still fits
+   "never chooses to skip".
+
+**Your response: 1) Yes, agreed, good logic. I'm now wondering if this should be the standard, rather than not moving at all. Note the exception listed under (2). 2) Yes, agreed. **
+
+> **AI note:** Recorded: (1) when a piece already blocks, the defender blocks
+> the next most useful route with a different piece; (2) it does not move
+> only when no legal block exists. For equal AI players this is already the
+> standard. Your thought that it should stay the standard even with traits
+> (moving a second piece instead of skipping) is noted in T1, to settle at
+> the traits stage: intelligence would then decide which extra route is worth
+> blocking rather than whether to move at all.
+
+### Q29 — When should an advance move the ball further? (step 3)
+
+Today every planned advance moves the ball about 30 mm, so an attack from
+midfield takes many flicks (12.2 per goal on average, and two test attacks
+are still short of goal after 30 flicks). The rules also say that among safe
+flicks the AI prefers **lower strength, then shorter ball travel**, and "do
+not use power merely to maximize distance". So simply offering longer
+advances changes nothing: the 30 mm nudge always wins on strength. Which rule
+should equal AI players follow?
+
+- **A. Keep the rule as written.** Longer advances are offered but used only
+  when no shorter one is safe. Little change in play.
+- **B. Prefer progress when it is safe.** Among safe advances, choose the
+  one that moves the ball furthest forward while still leaving a piece behind
+  the ball for the next touch, as long as no opposing piece is within, for
+  example, 150 mm of the ball's path. Strength is then only the tie-break.
+  The rules text would need updating.
+- **C. A fixed, longer standard step.** Replace the 30 mm step with a longer
+  one (for example 80 mm), keeping "lower strength first" among the options.
+  Simple, but still one size for every position.
+
+Suggested default: **B**, with a maximum advance of 150 mm per flick and the
+150 mm opposing-piece clearance, both to tune in testing. With no defenders
+in training yet the clearance never applies, so step 4 is where it starts to
+matter. A future `risk` trait (T2) would set these distances per team.
+
+**Your response: This may eventually be linked to style of play. For example, possession based players will prefer shorter passes over counter attacking style players who want to advance as quickly as possible. I guess we need a standard 'balanced' style of play that incorporates elements of both. My only issue is advancing the ball can lead to a defender getting between the attacker and the ball.**
+
+> **AI note:** Recorded: equal AI players use one standard **balanced**
+> style; possession and counter-attack styles come later with traits (noted
+> under T2, T9 and G4). Your concern is right: after a long advance a
+> defender's block-flick could put a piece between the next attacking piece
+> and the ball. A concrete balanced rule that guards against this is proposed
+> in Q30.
+
+### Q30 — The balanced advance rule (follow-up to Q29)
+
+Proposed rule for equal AI players:
+
+1. **Prefer progress, up to a balanced limit.** Among safe advances, choose
+   the one that moves the ball furthest forward, up to **100 mm** per flick
+   (between today's 30 mm and the 150 mm a counter-attacking style might
+   use). Lower strength is the tie-break. A piece must still be left with a
+   clear next contact behind the ball (already checked by simulation).
+2. **Guard the gap.** An advance is **exposed** if any defending piece could
+   reach the route between the next attacking piece and the ball with one
+   block-flick within its strength cap (Q22). An exposed advance ranks below
+   every advance that is not exposed, but is not forbidden. In practice short
+   advances stay unexposed and long ones are used when defenders are far
+   away.
+3. With no defenders in training today, rule 2 has no effect until step 4;
+   it is written now and tested properly with the defenders.
+4. The rules text ("prefer lower strength, then shorter travel") would change
+   to describe this balanced rule.
+
+Is this the balanced standard you want? You can change the 100 mm limit, or
+choose a simpler version of rule 2 (for example, "exposed" if any defending
+piece is within 150 mm of the gap).
+
+**Your response: Initially I used a more guarded approach simply to test the AI players ability to move the ball, originally the demo was applying too much force to the flick, so I requested it be dampened. But for the purposes of a standard balanced rule I will trust your judgement; progress but not at the expense of losing possession. Remember possession is key.**
+
+> **AI note:** Recorded: the balanced rule above, with possession first.
+> Flicks are ranked by possession safety before progress: a flick that keeps
+> a piece behind the ball, keeps the ball near a teammate and (from step 4)
+> is not exposed always beats one that only goes further. Among equally safe
+> advances, the one with more progress wins, up to 100 mm, then lower
+> strength. The 100 mm limit is a named setting, to tune in testing.
+
+## Player traits (later stage)
+
+This is a log for the **player traits stage**, which comes after a full match
+works with equal AI players (your decision on Q25 and Q26). Nothing here is
+needed before then. At that stage, go through each item and mark it keep,
+change or remove. Each trait would be rated 0.0 to 1.0 in code and 0 to 100
+on screen (Q25), in the spirit of old FIFA team ratings.
+
+Each entry says what the trait would change in the simulator, and where in
+the code. "Equal players today" says what both AI players do until then.
+
+### General questions for the traits stage
+
+- **G1. Who has traits:** the AI player (one set per team), or each piece
+  (for example a sharper-shooting forward)? Subbuteo pieces are identical
+  figures, so per team seems the natural fit. Suggested: per AI player.
+- **G2. Overall rating:** combine the traits into one overall rating per team
+  for display and match-ups, like FIFA? Suggested: yes, an average shown
+  0 to 100, with the individual traits behind it.
+- **G3. Randomness:** traits that work through chance (T1 skip, T3 and T4
+  errors) need random draws. Suggested: one seeded generator per match so a
+  match can be replayed exactly.
+- **G4. Presets:** name a few ready-made team profiles (for example
+  "Balanced", "Possession", "Counter-attack", "Park the bus")? Suggested:
+  yes, later. "Balanced" is the style equal AI players use until then (Q29).
+
+**Keep / change / remove: TBD**
+
+### T1 — Intelligence (reading the game)
+
+- Defender skips its block-flick when already well placed (Q14, Q25: skip
+  probability equal to intelligence). **To settle first (Q28):** you
+  wondered whether the equal-player behaviour should stay the standard even
+  with traits, so that a well-placed defender blocks a second route with
+  another piece instead of skipping. Intelligence would then decide which
+  extra route is worth blocking, not whether to move.
+- More bank shots and bank passes: a high-intelligence player considers them
+  alongside direct routes, not only when direct routes fail (Q7).
+- Better "good position" judgement: a high-intelligence player could use the
+  slower simulation test (Q27) instead of the geometric one.
+- Looking further ahead: more lookahead checks (today `MAX_SHOT_CHECKS = 3`
+  in `sim_ai_verify.py`), and more setup passes that plan two touches ahead.
+- Equal players today: intelligence 1.0 behaviour, bank shots only when no
+  direct route works.
+
+**Keep / change / remove: TBD**
+
+### T2 — Risk (cautious to bold)
+
+- How far an advance may move the ball when the lane is clear (step 3
+  replaces the fixed `BALL_ADVANCE_MM = 30` with one balanced rule for both
+  teams, Q29 and Q30). Linked to style of play (Q29): a possession style
+  prefers short moves and passes, a counter-attacking style advances as fast
+  as it safely can; the balanced style sits between them.
+- Riskier flicks that may lose possession, instead of a step back (Q17).
+- Shooting from tighter angles, or with defenders close to the shot line.
+- Equal players today: one fixed, moderate setting for both teams.
+
+**Keep / change / remove: TBD**
+
+### T3 — Accuracy (aim)
+
+- A small random error in the flick's direction when it is carried out. The
+  planner would still plan as if the flick were perfect, so a less accurate
+  player sometimes misses the ball, hits a piece first (a foul) or sends a
+  pass wide. Code: added where the flick is applied (`flick_toward_target` in
+  `sim_ai_flick.py`), never inside the planner's simulation.
+- Equal players today: perfect aim.
+
+**Keep / change / remove: TBD**
+
+### T4 — Touch (strength control)
+
+- A small random error in flick strength, separate from aim: passes run long
+  or short, and close control near defenders gets harder. Same code place as
+  T3.
+- Equal players today: exact strength.
+
+**Keep / change / remove: TBD**
+
+### T5 — Decision speed
+
+- The match clock is real time (Q18), so a slower thinker uses more of the
+  match. Speed could set how many candidates are simulated per decision
+  (today 12 planned and 40 sampled in `sim_ai_verify.py`): fast but shallow,
+  or slow but thorough.
+- A defender too slow for the 0.10 s response window misses its block-flick
+  (the "forced trait of a lower-skilled team" mentioned in Q9).
+- Equal players today: the same candidate limits; decision time does not yet
+  affect play.
+
+**Keep / change / remove: TBD**
+
+### T6 — Defensive awareness
+
+- Where the block goes: blocking the shot line or the pass lane, and how well
+  it anticipates the attacker's next pass rather than the current one.
+- Which piece it moves: today's rule is the piece closest to the ball (Q22);
+  a weaker defender might move a poorly placed piece instead.
+- Equal players today: the step 4 rules (Q22, Q27).
+
+**Keep / change / remove: TBD**
+
+### T7 — Discipline
+
+- How close a flick may come to fouling: a disciplined player rejects flicks
+  that pass very near another piece before reaching the ball, which matters
+  once T3 and T4 add errors. Also how willing it is to risk a smashing foul
+  (Q16).
+- Equal players today: the verifier rejects any simulated foul, with no
+  extra margin.
+
+**Keep / change / remove: TBD**
+
+### T8 — Composure
+
+- Accuracy (T3, T4) drops under pressure: inside the shooting area, late in a
+  half, when behind, or with defenders close.
+- Equal players today: no pressure effects.
+
+**Keep / change / remove: TBD**
+
+### T9 — Passing style (teamwork)
+
+- Dribbling with one piece (using all three touches) or passing early,
+  setup passes as against direct passes, and how strongly to prefer a ball
+  stopping near a teammate (today `SAFE_REACH_MM = 100`).
+- Equal players today: the current ranking.
+
+**Keep / change / remove: TBD**
+
+### T10 — Tactics and formation
+
+- Preferred formation (Q19, Q23), how far up the pitch the defending pieces
+  sit, and pressing as against sitting back. More a style choice than a
+  0 to 100 rating; it may fit G4 presets better.
+- Equal players today: 2-2 for both teams.
+
+**Keep / change / remove: TBD**
+
+### T11 — Goalkeeping
+
+- Once the goalkeeper exists: reaction speed along the rod, positioning
+  ahead of a shot, and how it uses its three touches (Q4).
+- Equal players today: no goalkeeper behaviour yet.
+
+**Keep / change / remove: TBD**
+
+### T12 — Consistency (form)
+
+- How much the other traits vary from match to match or half to half, so a
+  strong team can have an off day.
+- Equal players today: no variation.
+
+**Keep / change / remove: TBD**
+
+### T13 — Stamina (optional)
+
+- A real Subbuteo player tires over 30 minutes; accuracy (T3, T4) or decision
+  speed (T5) could drop late in each half. It may not suit an AI player, so it
+  is listed as optional.
+- Equal players today: none.
+
+**Keep / change / remove: TBD**

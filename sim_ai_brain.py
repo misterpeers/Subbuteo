@@ -26,6 +26,8 @@ from sim_physics import (
 
 FLICK_SAFETY_FACTOR = 0.88
 BALL_ADVANCE_MM = 30.0
+SHOT_AIM_DEPTH_MM = 24.0
+SHOT_AIM_OFFSETS_MM = (0.0, -20.0, 20.0, -38.0, 38.0)
 SETUP_OFFSETS_MM = (15.0, 30.0)
 SETUP_DIRECTIONS = 12
 SAMPLE_CONTACT_OFFSETS_MM = (-14.0, -7.0, 0.0, 7.0, 14.0)
@@ -457,6 +459,47 @@ def _ball_pass_plan(
     return best_plan
 
 
+def _shot_plans(
+    piece_position: Vector2,
+    ball_position: Vector2,
+    obstacles: list[Obstacle],
+) -> list[FlickPlan]:
+    """Return shots at aim points across the goal mouth, centre first.
+
+    Each aim point lies ``SHOT_AIM_DEPTH_MM`` behind the goal line, offset
+    across the mouth by one of ``SHOT_AIM_OFFSETS_MM``. The outermost offset
+    keeps the ball clear of the posts. Offering several aims lets simulation
+    find an open part of the goal when the centre is blocked or the angle is
+    tight.
+
+    Args:
+        piece_position: Normalized position of the shooting piece.
+        ball_position: Normalized ball position, attacking toward increasing X.
+        obstacles: Areas the piece and ball paths must avoid.
+
+    Returns:
+        list[FlickPlan]: Possible shots in aim order (the centre, then
+            further out), or an empty list if the ball is not strictly inside
+            the shooting area or no aim has a safe contact.
+    """
+    shooting_line = 1.0 - SHOOTING_AREA_DEPTH_MM / PITCH_LENGTH_MM
+    if ball_position.x <= shooting_line:
+        return []
+    aim_x = 1.0 + SHOT_AIM_DEPTH_MM / PITCH_LENGTH_MM
+    shots: list[FlickPlan] = []
+    for offset_mm in SHOT_AIM_OFFSETS_MM:
+        shot = _ball_contact_plan(
+            piece_position,
+            ball_position,
+            Vector2(aim_x, 0.5 + offset_mm / PITCH_WIDTH_MM),
+            obstacles,
+            action="shot",
+        )
+        if shot is not None:
+            shots.append(shot)
+    return shots
+
+
 def _ball_advance_waypoints(
     ball_position: Vector2,
     obstacles: list[Obstacle],
@@ -518,23 +561,33 @@ def _plan_piece_flick(
 ) -> FlickPlan | None:
     """Plan one piece's shot, short advance, or possession-preserving pass.
 
+    This is the single place that decides between shooting, advancing and
+    passing for one piece. It plans the flicking piece's own move and also
+    judges a setup-pass receiver's next move; the two differ only in the
+    advance targets they pass in.
+
     Coordinates use the canonical attacking direction of increasing X.
+
+    Args:
+        piece_position: Normalized position of the piece.
+        ball_position: Normalized ball position.
+        obstacles: Areas the piece and ball paths must avoid.
+        piece_touches_used: Consecutive touches the piece has already used.
+        teammates: Identifiers and positions of possible pass receivers.
+        advance_waypoints: Ball targets for an advance. ``None`` means the
+            standard targets toward the goal from ``_ball_advance_waypoints``.
+
+    Returns:
+        FlickPlan | None: A shot if one is available inside the shooting area,
+            otherwise a pass on the final touch, otherwise the advance needing
+            the least strength, otherwise a pass; ``None`` if nothing is safe.
     """
     if piece_touches_used >= 3:
         return None
 
-    shooting_line = 1.0 - SHOOTING_AREA_DEPTH_MM / PITCH_LENGTH_MM
-    goal_target = Vector2(1.02, 0.5)
-    if ball_position.x > shooting_line:
-        shot = _ball_contact_plan(
-            piece_position,
-            ball_position,
-            goal_target,
-            obstacles,
-            action="shot",
-        )
-        if shot is not None:
-            return shot
+    shots = _shot_plans(piece_position, ball_position, obstacles)
+    if shots:
+        return shots[0]
 
     if piece_touches_used >= 2:
         return _ball_pass_plan(
@@ -655,46 +708,26 @@ def _approach_intersects_teammate(
     )
 
 
-def _ball_followup_plan(
-    piece_position: Vector2,
-    ball_position: Vector2,
-    piece_touches_used: int,
-    teammates: list[tuple[str, Vector2]],
-    obstacles: list[Obstacle],
-) -> FlickPlan | None:
-    """Find a short, direct follow-up flick for a setup-pass receiver."""
-    if piece_touches_used >= 3:
-        return None
+def _angled_advance_waypoints(ball_position: Vector2) -> list[Vector2]:
+    """Return short advance targets straight ahead and 30 degrees either side.
 
-    shooting_line = 1.0 - SHOOTING_AREA_DEPTH_MM / PITCH_LENGTH_MM
-    if ball_position.x > shooting_line:
-        shot = _ball_contact_plan(
-            piece_position,
-            ball_position,
-            Vector2(1.02, 0.5),
-            obstacles,
-            action="shot",
-        )
-        if shot is not None:
-            return shot
+    Used to judge a setup-pass receiver's next flick, where a quick local
+    check is wanted rather than a route toward the goal.
 
-    if piece_touches_used >= 2:
-        return _ball_pass_plan(
-            piece_position,
-            ball_position,
-            teammates,
-            obstacles,
-        )
+    Args:
+        ball_position: Normalized ball position, attacking toward increasing X.
 
-    advance_plans: list[FlickPlan] = []
+    Returns:
+        list[Vector2]: Targets ``BALL_ADVANCE_MM`` from the ball that keep the
+            ball inside the pitch.
+    """
+    waypoints: list[Vector2] = []
     for angle in (-pi / 6.0, 0.0, pi / 6.0):
         ball_target = Vector2(
-            ball_position.x
-            + cos(angle) * BALL_ADVANCE_MM / PITCH_LENGTH_MM,
-            ball_position.y
-            + sin(angle) * BALL_ADVANCE_MM / PITCH_WIDTH_MM,
+            ball_position.x + cos(angle) * BALL_ADVANCE_MM / PITCH_LENGTH_MM,
+            ball_position.y + sin(angle) * BALL_ADVANCE_MM / PITCH_WIDTH_MM,
         )
-        if not (
+        if (
             BALL_RADIUS_MM / PITCH_LENGTH_MM
             <= ball_target.x
             <= 1.0 - BALL_RADIUS_MM / PITCH_LENGTH_MM
@@ -702,31 +735,8 @@ def _ball_followup_plan(
             <= ball_target.y
             <= 1.0 - BALL_RADIUS_MM / PITCH_WIDTH_MM
         ):
-            continue
-        plan = _ball_contact_plan(
-            piece_position,
-            ball_position,
-            ball_target,
-            obstacles,
-            action="advance",
-        )
-        if plan is not None:
-            advance_plans.append(plan)
-
-    if advance_plans:
-        return min(
-            advance_plans,
-            key=lambda plan: (
-                plan.strength,
-                distance_between_mm(ball_position, plan.ball_target),
-            ),
-        )
-    return _ball_pass_plan(
-        piece_position,
-        ball_position,
-        teammates,
-        obstacles,
-    )
+            waypoints.append(ball_target)
+    return waypoints
 
 
 def _ball_setup_plan(
@@ -795,12 +805,13 @@ def _ball_setup_plan(
                 ):
                     continue
 
-                next_plan = _ball_followup_plan(
+                next_plan = _plan_piece_flick(
                     receiver_position,
                     ball_target,
-                    receiver_touches,
-                    receiver_teammates,
                     obstacles,
+                    piece_touches_used=receiver_touches,
+                    teammates=receiver_teammates,
+                    advance_waypoints=_angled_advance_waypoints(ball_target),
                 )
                 if next_plan is None:
                     continue
@@ -869,11 +880,16 @@ def _team_flick_candidates(
             teammates=teammates,
             advance_waypoints=advance_waypoints,
         )
-        if plan is not None:
+        if plan is None:
+            continue
+        piece_plans = [plan]
+        if plan.action == "shot":
+            piece_plans = _shot_plans(piece_position, ball_position, obstacles)
+        for piece_plan in piece_plans:
             if any(
                 _approach_intersects_teammate(
                     piece_position,
-                    plan.piece_target,
+                    piece_plan.piece_target,
                     teammate_position,
                 )
                 for teammate_id, teammate_position, _ in player_pieces
@@ -882,11 +898,11 @@ def _team_flick_candidates(
                 continue
             candidate_plans.append(
                 FlickPlan(
-                    piece_target=plan.piece_target,
-                    ball_target=plan.ball_target,
-                    strength=plan.strength,
-                    action=plan.action,
-                    receiver_piece_id=plan.receiver_piece_id,
+                    piece_target=piece_plan.piece_target,
+                    ball_target=piece_plan.ball_target,
+                    strength=piece_plan.strength,
+                    action=piece_plan.action,
+                    receiver_piece_id=piece_plan.receiver_piece_id,
                     flicking_piece_id=piece_id,
                 )
             )
@@ -960,7 +976,8 @@ def plan_team_flick_candidates(
     """List every safe candidate flick for a team, best first.
 
     The order follows the attacker priorities: shots, then setup passes, then
-    advances and passes, each by lower flick strength. Setup passes are only
+    advances and passes, each by lower flick strength. A piece that can shoot
+    offers one shot per aim point across the goal mouth. Setup passes are only
     generated when no shot is available.
 
     Args:

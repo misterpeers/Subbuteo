@@ -204,6 +204,9 @@ or gameplay rules.
 
 - **Perimeter:** All pitch boundary lines behave as solid rebound walls with
   the same recommended coefficient of restitution, `0.65`.
+- **Player pieces and the net:** For player pieces, each goal line is a wall
+  along its full width, including the goal mouth. Player pieces never enter
+  the net; only the ball can.
 - **Touchlines:** The ball rebounds and stays in play; a touchline rebound
   does not change possession.
 - **Goal lines:** The ball rebounds when it contacts either goal line. If the
@@ -342,6 +345,16 @@ This choice is for testing and will be reviewed.
   0.10-second response window, moving one field piece to intercept a shot or
   passing lane. The defender may also choose not to move; play then continues
   normally.
+- **Where defending pieces may go:** During play, a defending piece may go
+  anywhere on the pitch, including the shooting area and directly in front of
+  the goal mouth, but never into the net (see
+  [Boundaries and ball-out behavior](#boundaries-and-ball-out-behavior)). The
+  formation and scoring-area restrictions apply only at kick-off.
+- **Equal AI players:** Until player traits are introduced, the defending
+  player never chooses to skip; it always makes a block-flick. If a piece
+  already blocks the route it would protect, it blocks the next most useful
+  route with a different piece. It does not move only when no legal
+  block-flick exists.
 - The block-flick action must not cause the defending piece to contact the
   ball or an attacking figure. An illegal block-flick is invalidated, play
   returns to the attacking player, and all attacking field-piece touch
@@ -490,7 +503,8 @@ continues.
    the nearest uncontrolled attacking figure.
 
 In each case, move the piece closest to the ball that can legally reach the
-blocking position within its strength cap.
+blocking position within its strength cap. If a piece already blocks that
+route, block the next most useful route with a different piece instead.
 
 ### Clear lanes and bank shots
 
@@ -544,7 +558,9 @@ turn controller.
 - **Attacking AI:** Per-team planning of shots, short advances, direct passes,
   and third-touch setup passes, with the three-consecutive-touch limit,
   approach paths that avoid teammates and obstacles, and the shot > setup >
-  possession priority order.
+  possession priority order. Shots are aimed at several points across the
+  goal mouth (the center and points 20 mm and 38 mm to either side, keeping
+  the ball inside the posts), and simulation picks one that scores.
 - **Simulation-verified flicks:** Before a flick is used, it is simulated on a
   copy of the world through the normal physics. Flicks that miss the ball,
   strike another piece before the ball, touch an opposing piece or lose
@@ -558,9 +574,16 @@ turn controller.
   sideways move survives; among step backs, one that leaves a piece behind the
   ball (ready to push it forward) is preferred. The controller remembers where
   the ball stopped earlier in the attack, and a flick that returns it within
-  8 mm of one of those positions ranks last. Inside the shooting area,
-  progress is measured as getting closer to the goal mouth, so a ball pinned
-  beside the goal is worked along the goal line toward it.
+  8 mm of one of those positions ranks after a step back. Inside the shooting
+  area, progress is measured as getting closer to the goal mouth, so a ball
+  pinned beside the goal is worked along the goal line toward it.
+- **Lone forward lookahead:** A flick that leaves the piece in possession on
+  its final touch, with no other piece within flick range of the ball, can
+  only be followed by a shot. Outside the shooting area it is a dead end and
+  ranks last of all (it is not forbidden). Inside the shooting area it keeps
+  its rank only if simulating one flick further finds a scoring shot. When
+  nothing better than a dead end exists, stronger exploratory flicks are tried
+  so the piece can carry the ball into the shooting area in time.
 - **Turn controller:** Touch counts, touch resets on a pass to a teammate, goal
   detection, and possession loss when a flick misses the ball, the ball
   contacts an opposing piece, or play settles with possession transferred. It
@@ -570,8 +593,9 @@ turn controller.
 - **Scenario harness:** Seeded random attacking scenarios run headlessly to
   report goal rate, flicks per goal, outcome counts, decision statistics and
   reproducible failing seeds. Reference result, 100 seeds with three pieces:
-  93% goal rate (12.7 flicks per goal) with verification, against 23%
-  without it.
+  98% goal rate (11.7 flicks per goal for the home team, 11.8 for the away
+  team) with verification, against 23% without it. With four pieces, as in a
+  5-a-side team: 99% (12.5 flicks per goal).
 - **Rendering:** Pitch, score bug, timer, start menu, and piece rendering.
 
 ### Not yet implemented
@@ -586,6 +610,10 @@ turn controller.
   the first two to reject an attacker's own candidate flicks. Smashing is not
   detected at all, and the three-touch limit is enforced by the planner.
 - **Goalkeeper behavior, spin and curl, time-of-contact collision ordering.**
+- **Player traits:** Both AI players are equal. Per-player traits (for
+  example intelligence and risk, rated 0 to 100) are a later stage, after a
+  full match works; candidate traits are logged in
+  [AI_QUERIES.md](AI_QUERIES.md).
 - **Clear-lane and bank-shot logic:** The geometric planner assumes straight
   ball paths. Simulation now checks the real result, including wall rebounds,
   but the planner does not deliberately propose bank shots and does not
@@ -593,10 +621,9 @@ turn controller.
 - **Match flow:** Kick-off, halves, the real-time match clock, formations
   (including even `Y` spacing and the first 5-a-side 2-2 match), and restarts.
   The demo shows only an attacking sequence.
-- **No-move outcome:** A sequence still ends with a `no_plan` outcome when no
-  safe flick exists (5% of the reference scenarios). All remaining cases are a
-  lone piece far ahead of its teammates that cannot reach the shooting area in
-  its three touches; the planner does not yet look ahead to avoid this. The
-  rules allow no such outcome in a match (see "Stuck attacker"). A few slow
-  attacks (2%) reach the scenario harness's 30-flick cut-off, which is a test
-  stop only, not a game rule.
+- **No-move outcome:** A sequence still ends with a `no_plan` outcome if no
+  safe flick exists. This no longer happens in the reference scenarios, but the
+  outcome remains in code until the stuck attacker's move is built; the rules
+  allow no such outcome in a match (see "Stuck attacker"). A few slow attacks
+  (2%) reach the scenario harness's 30-flick cut-off, which is a test stop
+  only, not a game rule.

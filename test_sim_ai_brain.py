@@ -265,6 +265,40 @@ class BrainPlanningTests(unittest.TestCase):
         self.assertEqual(plan.action, "shot")
         self.assertEqual(plan.ball_target, Vector2(1.02, 0.5))
 
+    def test_team_candidates_offer_shots_across_the_goal_mouth(self) -> None:
+        """A shooting piece offers one shot per aim point, centre first."""
+        candidates = plan_team_flick_candidates(
+            [("ai-piece-1", Vector2(0.82, 0.5), 0)],
+            Vector2(0.85, 0.5),
+        )
+        shots = [plan for plan in candidates if plan.action == "shot"]
+        aims_mm = sorted(
+            round((plan.ball_target.y - 0.5) * 800.0) for plan in shots
+        )
+
+        self.assertEqual(aims_mm, [-38, -20, 0, 20, 38])
+        for plan in shots:
+            self.assertAlmostEqual(plan.ball_target.x, 1.02)
+
+    def test_blocked_centre_shot_uses_another_aim_point(self) -> None:
+        """An obstacle on the centre line still leaves a shot at the side."""
+        obstacle = Obstacle(
+            center=Vector2(0.95, 0.5),
+            size=Vector2(0.005, 0.005),
+            padding=0.0,
+        )
+
+        plan = plan_piece_flick(
+            Vector2(0.82, 0.5),
+            Vector2(0.85, 0.5),
+            [obstacle],
+            piece_touches_used=2,
+        )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.action, "shot")
+        self.assertNotAlmostEqual(plan.ball_target.y, 0.5)
+
     def test_fourth_consecutive_piece_flick_is_never_planned(self) -> None:
         """A piece cannot exceed the three-consecutive-touch rule."""
         plan = plan_piece_flick(

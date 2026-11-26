@@ -91,7 +91,14 @@ The attacking AI planner. It decides what to do, but never applies a flick.
   picks the best piece and action for a team. Priority is shot, then setup
   pass, then advance or pass, preferring lower strength and shorter travel.
   `plan_team_flick_candidates()` returns the whole ranked list, best first
-  (`plan_team_flick()` returns its first entry).
+  (`plan_team_flick()` returns its first entry). One internal function,
+  `_plan_piece_flick()`, decides shoot, advance or pass, both for the
+  flicking piece and when the setup-pass search judges a receiver's next
+  move (with short angled advances from `_angled_advance_waypoints()`).
+- Shot aim: `_shot_plans()` aims at `SHOT_AIM_OFFSETS_MM` (0, ±20 and ±38 mm
+  across the goal mouth, 24 mm behind the goal line). A single-piece plan
+  tries the center first; the team candidate list offers every aim point,
+  and the verifier keeps one that scores.
 - Sampled flicks: `sample_flick_candidates()` generates exploratory flicks from
   one piece, aimed beside the ball's center at several strengths. It has no
   direction of its own; callers judge the result by simulating it.
@@ -123,23 +130,37 @@ What-if simulation of flicks. It never changes the world it is given.
   other piece blocks. With `behind_ball_for` set, only pieces behind the ball
   count, so their flick can push it forward. The outcome records both
   (`next_contact_available`, `forward_contact_available`).
+- Lone final touch: only one piece can be partway through its consecutive
+  touches. When a flick leaves that piece on its final touch, without a pass,
+  and no other piece of the team is within flick range of the ball (blocked or
+  not), the final touch can only score. `FlickOutcome.dead_end` marks this with
+  the ball outside the shooting area; `FlickOutcome.needs_shot_check` marks it
+  with the ball inside.
 - `plan_verified_team_flick()`: simulates the planner's candidates and rejects
   any that lose the ball, foul, or leave no next contact (unless they score).
   It ranks the rest as goal, setup pass, advance or pass, a non-scoring shot,
   then a **step back** (ball moved more than 50 mm back), then a **repeat**
   (ball stops within 8 mm of a position where it already stopped in this
-  attack, from `visited_ball_positions`). Within a group it prefers a flick
-  that leaves a piece behind the ball, then a ball that stops within 100 mm of
-  a teammate, then lower strength, then shorter travel.
+  attack, from `visited_ball_positions`), then a **dead end**. Within a group
+  it prefers a flick that leaves a piece behind the ball, then a ball that
+  stops within 100 mm of a teammate, then lower strength, then shorter travel.
+- Shot check: a flick with `needs_shot_check` keeps its rank only if
+  `_ShotChecker` finds a verified goal when it simulates the flick and plans
+  the next one on the result; otherwise it counts as a dead end. At most
+  `MAX_SHOT_CHECKS` (3) checks per decision, each a full planning run.
 - Sampled fallback: if no planner candidate survives, or the best one is a step
-  back or a repeat, it simulates sampled flicks too, which may go forward,
-  sideways or backward; a non-forward move is only accepted if it leaves the
-  ball near a teammate or inside the shooting area. Planned and sampled flicks
-  are compared on shared levels (goal, advance, step back, repeat) and the
-  better level wins, the planned flick on a tie. The result is a
-  `VerifiedFlick` whose `source` is `planned` or `sampled`.
-- Limits: 12 planner candidates and 40 sampled candidates per decision, each
-  simulated for at most 600 steps of 1/60 s.
+  back, a repeat or a dead end, it simulates sampled flicks too, which may go
+  forward, sideways or backward; a non-forward move is only accepted if it
+  leaves the ball near a teammate or inside the shooting area. Planned and
+  sampled flicks are compared on shared levels (goal, advance, step back,
+  repeat, dead end) and the better level wins, the planned flick on a tie. If
+  nothing better than a dead end exists, the sampled contact points are tried
+  again at `LONG_SAMPLE_STRENGTHS` (0.5, 0.7, 0.9), which can carry the ball
+  into the shooting area. The result is a `VerifiedFlick` whose `source` is
+  `planned` or `sampled`.
+- Limits: 12 planner candidates and 40 sampled candidates per decision (plus
+  up to 40 for the long-reach pass), each simulated for at most 600 steps of
+  1/60 s.
 
 Imports: `sim_ai_brain`, `sim_ai_flick`, `sim_physics`.
 
@@ -177,8 +198,10 @@ The scenario harness for measuring the AI without a window.
   (how many decisions used a planner candidate, a sampled fallback, or found no
   move, and the mean, median, 95th percentile and maximum decision time).
 - Command line: `python sim_scenarios.py --count 100 --seed 0 --team home`.
-  Add `--no-verify` to use the planner's first choice without simulating it,
-  for comparison.
+  Add `--pieces 4` for four attacking pieces (the 5-a-side reference; the
+  default is 3), `--max-flicks` to change the 30-flick test stop, and
+  `--no-verify` to use the planner's first choice without simulating it, for
+  comparison.
 
 Imports: `sim_ai_brain`, `sim_physics`, `sim_turns`.
 
@@ -209,8 +232,8 @@ Run all tests with `python -m unittest discover -p "test_*.py"`.
 |---|---|
 | `test_sim_physics.py` | Boundaries, goals, possession transfers, net damping, collisions, flick strength, piece-contact record and world cloning. |
 | `test_sim_ai_flick.py` | Aiming and strength limits, plus the training UI's coordinate panel and rulers. |
-| `test_sim_ai_brain.py` | Waypoints, contact planning, passes, setup passes, touch limits, attack direction, candidate ordering and sampled flicks. |
-| `test_sim_ai_verify.py` | Simulated outcomes, foul-before-ball detection, verified selection, the sampled fallback, the next-contact check, step-back and repeat ranking, and progress measurement inside and outside the shooting area. |
+| `test_sim_ai_brain.py` | Waypoints, contact planning, passes, setup passes, touch limits, attack direction, candidate ordering, shot aim points across the goal mouth and sampled flicks. |
+| `test_sim_ai_verify.py` | Simulated outcomes, foul-before-ball detection, verified selection, the sampled fallback, the next-contact check, step-back, repeat and dead-end ranking, the shot check, the lone forward reaching the shooting area, an angled shot beating a piece on the centre line, and progress measurement inside and outside the shooting area. |
 | `test_sim_turns.py` | Controller outcomes, hand-over, direction, the three-touch limit, decision statistics and the recorded ball stops. |
 | `test_sim_scenarios.py` | Seed reproducibility, home and away symmetry over a short horizon, and report content. |
 
@@ -225,9 +248,12 @@ Run all tests with `python -m unittest discover -p "test_*.py"`.
    does not touch the world.
 4. Each candidate is simulated on a `PhysicsWorld.clone()`. Candidates that
    miss the ball, foul, hit an opposing piece, lose possession or leave no
-   next contact are rejected. If none survive, or the best is only a step back
-   or a repeat, `sample_flick_candidates()` supplies exploratory flicks, which
-   are simulated and ranked the same way.
+   next contact are rejected. A flick that leaves a lone piece on its final
+   touch inside the shooting area is kept only if a look one flick ahead finds
+   a goal. If none survive, or the best is only a step back, a repeat or a dead
+   end, `sample_flick_candidates()` supplies exploratory flicks, which are
+   simulated and ranked the same way, with a stronger second pass when only a
+   dead end remains.
 5. The controller applies the chosen plan to the real world with
    `flick_toward_target()`, which calls `PhysicsWorld.flick()`.
 6. Physics runs. The controller reads `last_ball_contacts`, `last_goal` and
