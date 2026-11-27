@@ -30,7 +30,7 @@ you. The last column says what is waiting on each one.
 | Q4 | Goalkeeper saves | Answered | Nothing (placeholder) |
 | Q5 | Teammate contact and fouls | Answered | Nothing |
 | Q6 | Clear shooting and passing lanes | Answered: simulate and see, for now | Nothing |
-| Q7 | Bank shots | Answered: only when no direct shot or pass works; more bank shots with higher intelligence (traits stage, T1) | Step 3 |
+| Q7 | Bank passes (originally "bank shots") | Answered: only when no direct pass works; more with higher intelligence (traits stage, T1); no bank shots (Q31); bank passes built in step 3.4 | Traits stage (T1) |
 | Q8 | Setup-pass validity | Answered; optional numeric rule is Q20 | Nothing |
 | Q9 | Block-flick timing | Answered; strength cap is Q15 and skipping is Q14 | Defenders |
 | Q10 | Formation Y-coordinates | Answered: even spacing, for now | Nothing |
@@ -54,10 +54,14 @@ you. The last column says what is waiting on each one.
 | Q28 | A defender that always moves: edge cases | Answered: block the next route with another piece; no move only if no legal block | Nothing |
 | Q29 | When should an advance move the ball further? | Answered: a standard balanced style; styles later; guard against defenders getting between (Q30) | Nothing |
 | Q30 | The balanced advance rule | Answered: as proposed, possession first, progress up to 100 mm | Nothing |
+| Q31 | Bank shots and bank passes (revises Q7) | Answered in session: no bank shots; bank passes allowed; accidental rebounds allowed | Nothing |
+| Q32 | Build step 3.5 (pieces as circles in the planner) now or after the defenders | **Open** | Step 3.5 |
 | T1 to T13, G1 to G4 | Player traits log | Later: review at the traits stage | Traits stage |
 
-Most useful to answer next: **Q11** (goalkeeper). Q20 is optional. Nothing else blocks step 3 or step 4. Nothing blocks step 3. The traits log (T1 to
-T13, G1 to G4) waits for the traits stage, after the full match.
+Most useful to answer next: **Q32** (whether to build step 3.5 now), then
+**Q11** (goalkeeper). Q20 is optional. Nothing else blocks step 3 or step
+4. The traits log (T1 to T13, G1 to G4) waits for the traits stage, after
+the full match.
 
 ## Questions
 
@@ -170,6 +174,9 @@ passes, or only use a bank shot when a direct route is blocked?
 > compared with direct shots whenever both are available?
 
 **Additional response: In line with incorporating an intelligence trait to the AI player I would expect a player with high intelligence to try bank shots more over a player with lower intelligence.**
+
+> **AI note (2026-11-27):** Revised by Q31: deliberate bank **shots** on
+> goal are not allowed; bank **passes** are, under the rule above.
 
 > **AI note:** Recorded for the player traits stage (see T1 under "Player
 > traits (later stage)"). No code needs changing now: bank shots are not built
@@ -613,6 +620,58 @@ piece is within 150 mm of the gap).
 > advances, the one with more progress wins, up to 100 mm, then lower
 > strength. The 100 mm limit is a named setting, to tune in testing.
 
+### Q31 — Bank shots and bank passes (revises Q7)
+
+Step 3.4 was planned to build both bank shots (a shot on goal that rebounds
+off a wall first) and bank passes (a pass to a teammate that rebounds off a
+wall first). You said bank shots should not be allowed. Does that cover
+passes too, and may an exploratory flick still rebound off a wall by
+accident?
+
+**Your response (given in the session on 2026-11-27):** No bank shots;
+bank passes are allowed. Accidental rebounds are still allowed.
+
+> **AI note:** Recorded. The attacker never aims a shot off a wall. It may
+> aim a pass off a wall only when no direct pass works (Q7). A flick found
+> by exploration that happens to rebound is still accepted if simulation
+> shows a legal, good result, because the walls are part of the pitch. The
+> rules were updated at the user's request: the term is now **bank pass**
+> throughout ("Clear lanes and bank passes", the dictionary, attacker
+> priority 2 and the implementation status), with an explicit "no bank
+> shots" rule.
+
+### Q32 — Build step 3.5 (pieces as circles in the planner) now, or after the defenders?
+
+The planner suggests flicks from geometry, and simulation then checks each
+one. The planner cannot see other pieces (only the training rectangles, and
+in a match only the goalkeeper), so it can suggest a flick straight through
+a piece; simulation then rejects it. Step 3.5 would let the planner see every
+outfield piece as a circle, so it stops suggesting those flicks.
+
+Measured with static opposing pieces placed at random ahead of the ball
+(100 test attacks, four attacking pieces):
+
+- 2 opposing pieces: 3% of suggestions rejected for hitting a piece; 7% of
+  decisions affected; in 1.6% of decisions the AI fell back to a worse
+  choice. Still 100% goals, 5.7 flicks per goal (5.4 with no opposing
+  pieces).
+- 4 opposing pieces: 6% of suggestions rejected; 13% of decisions affected;
+  2.5% fell back. Still 100% goals, 5.9 flicks per goal.
+
+Real defenders (step 4) will stand in lanes on purpose and move, so these
+figures are a lower bound. Options:
+
+- **A.** Build 3.5 now, before the defenders.
+- **B.** Defer it: go on to 3.6, build the defenders in step 4, then measure
+  again with real defenders and build 3.5 if the cost is clearly higher
+  (for example more than 10% of suggestions rejected, or more than 5% of
+  decisions falling back).
+- **C.** Drop it and rely on simulation alone.
+
+Suggested default: **B**.
+
+**Your response: TBD**
+
 ## Player traits (later stage)
 
 This is a log for the **player traits stage**, which comes after a full match
@@ -649,8 +708,9 @@ the code. "Equal players today" says what both AI players do until then.
   with traits, so that a well-placed defender blocks a second route with
   another piece instead of skipping. Intelligence would then decide which
   extra route is worth blocking, not whether to move.
-- More bank shots and bank passes: a high-intelligence player considers them
-  alongside direct routes, not only when direct routes fail (Q7).
+- More bank passes: a high-intelligence player considers them alongside
+  direct routes, not only when direct routes fail (Q7). Bank shots are not
+  allowed (Q31).
 - Better "good position" judgement: a high-intelligence player could use the
   slower simulation test (Q27) instead of the geometric one.
 - Looking further ahead: more lookahead checks (today `MAX_SHOT_CHECKS = 3`

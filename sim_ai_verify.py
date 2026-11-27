@@ -13,7 +13,10 @@ from math import sqrt
 from sim_ai_brain import (
     FlickPlan,
     Obstacle,
+    bank_pass_candidates,
+    block_flick_cap,
     plan_team_flick_candidates,
+    progress_steps,
     sample_flick_candidates,
 )
 from sim_ai_flick import distance_between_mm, flick_toward_target
@@ -29,6 +32,8 @@ from sim_physics import (
     Vector2,
     attack_direction,
 )
+
+_RankKey = tuple[int, int, int, int, int, float, float]
 
 SIMULATION_STEP_SECONDS = 1.0 / 60.0
 MAX_SIMULATION_STEPS = 600
@@ -46,6 +51,8 @@ REPEAT_RADIUS_MM = 8.0
 DEAD_END_CATEGORY = 6
 MAX_SHOT_CHECKS = 3
 LONG_SAMPLE_STRENGTHS = (0.5, 0.7, 0.9)
+BANK_ONLY_WHEN_NO_DIRECT = True
+MAX_BANK_CANDIDATES = 20
 LEVEL_GOAL = 0
 LEVEL_ADVANCE = 1
 LEVEL_STEP_BACK = 2
@@ -115,6 +122,11 @@ class FlickOutcome:
             the shooting area. The attack then goes on only if that final
             touch can score, which the chooser checks by looking one flick
             ahead.
+        exposed: Whether an opposing piece could put itself between the
+            next attacking piece and the ball with one block-flick within
+            its strength cap (``block_flick_cap``), so the attack could lose
+            its route to the ball. Always ``False`` for a goal or when there
+            are no opposing field pieces.
     """
 
     flick_applied: bool
@@ -134,6 +146,7 @@ class FlickOutcome:
     forward_contact_available: bool = True
     dead_end: bool = False
     needs_shot_check: bool = False
+    exposed: bool = False
 
     @property
     def keeps_possession(self) -> bool:
@@ -319,6 +332,115 @@ def has_next_contact(
             for other in world.pieces
             if other.body_id != piece.body_id
         ):
+            return True
+    return False
+
+
+def _flick_reach_mm(strength: float) -> float:
+    """Return how far a piece slides when flicked at a strength.
+
+    Args:
+        strength: Flick strength from 0.0 to 1.0.
+
+    Returns:
+        float: Sliding distance in millimeters before friction stops it.
+    """
+    speed = strength * MAX_FLICK_SPEED_MM_S
+    return speed * speed / (2.0 * PIECE_FRICTION_MM_S2)
+
+
+def _distance_to_segment_mm(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> float:
+    """Return the distance from a point to a line segment, in millimeters.
+
+    Args:
+        point: The point, in millimeters.
+        start: One end of the segment, in millimeters.
+        end: The other end of the segment, in millimeters.
+
+    Returns:
+        float: The shortest distance from the point to the segment.
+    """
+    delta_x, delta_y = end[0] - start[0], end[1] - start[1]
+    length_squared = delta_x * delta_x + delta_y * delta_y
+    fraction = 0.0
+    if length_squared > 0.0:
+        fraction = max(
+            0.0,
+            min(
+                1.0,
+                (
+                    (point[0] - start[0]) * delta_x
+                    + (point[1] - start[1]) * delta_y
+                )
+                / length_squared,
+            ),
+        )
+    nearest_x = start[0] + fraction * delta_x
+    nearest_y = start[1] + fraction * delta_y
+    return sqrt((point[0] - nearest_x) ** 2 + (point[1] - nearest_y) ** 2)
+
+
+def is_exposed(
+    world: PhysicsWorld,
+    team: str,
+    next_pieces: Sequence[Body],
+) -> bool:
+    """Return whether a defender could block the next attacking contact.
+
+    The next attacking piece is the nearest piece, among those that may flick
+    next, that stands behind the ball (so it can push the ball forward), or
+    the nearest of them if none stands behind it. The gap is the segment from
+    that piece's center to the ball's center. The position is exposed if any
+    opposing field piece could slide its base onto that segment with one
+    block-flick at its strength cap, which grows with its distance from the
+    ball (``block_flick_cap``). This is a quick, cautious estimate: it does
+    not check that the blocking flick would itself be legal.
+
+    Args:
+        world: A settled world.
+        team: The attacking team.
+        next_pieces: The attacking pieces that may take the next flick.
+
+    Returns:
+        bool: ``True`` if some opposing piece could reach the gap.
+    """
+    opponents = [
+        body
+        for body in world.pieces
+        if body.team is not None
+        and body.team != team
+        and body.movable
+        and body.kind == "piece"
+    ]
+    if not opponents or not next_pieces:
+        return False
+    ball = world.ball
+    ball_mm = _to_mm(ball.position)
+    direction = attack_direction(team)
+    behind = [
+        body
+        for body in next_pieces
+        if direction * (ball_mm[0] - _to_mm(body.position)[0])
+        >= ball.radius_mm
+    ]
+    nearest = min(
+        behind or list(next_pieces),
+        key=lambda body: distance_between_mm(body.position, ball.position),
+    )
+    piece_mm = _to_mm(nearest.position)
+    for opponent in opponents:
+        cap = block_flick_cap(
+            distance_between_mm(opponent.position, ball.position)
+        )
+        gap = (
+            _distance_to_segment_mm(_to_mm(opponent.position), piece_mm, ball_mm)
+            - opponent.radius_mm
+        )
+        if gap <= _flick_reach_mm(cap):
             return True
     return False
 
@@ -535,6 +657,7 @@ def _run_flick(
         ),
         dead_end=final_touch_alone and not in_area,
         needs_shot_check=final_touch_alone and in_area,
+        exposed=not goal and is_exposed(trial, team, next_pieces),
     )
     return outcome, trial
 
@@ -595,7 +718,7 @@ def _rank_key(
     plan: FlickPlan,
     outcome: FlickOutcome,
     visited_ball_positions: Sequence[Vector2] = (),
-) -> tuple[int, int, int, float, float]:
+) -> _RankKey:
     """Order verified flicks: goal, setup, advance or pass, weak shot, step back.
 
     A flick that moves the ball more than ``STEP_BACK_MM`` toward the team's
@@ -603,10 +726,12 @@ def _rank_key(
     where it has already stopped in this attack is a repeat. Both rank after
     every other flick, the repeat after the step back. A dead end (see
     ``FlickOutcome.dead_end``) ranks last of all, because the attack would
-    stall after one more touch. Within a category, a flick that leaves
-    a teammate behind the ball is preferred, then a ball that stops within
-    safe reach of a teammate, then lower flick strength, then shorter ball
-    travel.
+    stall after one more touch. Within a category the balanced,
+    possession-first rule applies: possession safety first (a teammate left
+    behind the ball, then a ball that stops within safe reach of a teammate,
+    then a position that is not exposed to a block-flick), then more forward
+    progress in ``PROGRESS_STEP_MM`` steps up to ``MAX_ADVANCE_MM``, then lower
+    flick strength, then shorter ball travel.
     """
     if outcome.goal:
         category = 0
@@ -630,6 +755,8 @@ def _rank_key(
         category,
         0 if outcome.forward_contact_available else 1,
         0 if near_teammate else 1,
+        1 if outcome.exposed else 0,
+        -progress_steps(outcome.ball_progress_mm),
         plan.strength,
         outcome.ball_travel_mm,
     )
@@ -665,6 +792,7 @@ def plan_verified_team_flick(
     allow_sampling: bool = True,
     max_sampled_candidates: int = MAX_SAMPLED_CANDIDATES,
     visited_ball_positions: Sequence[Vector2] = (),
+    bank_only_when_no_direct: bool = BANK_ONLY_WHEN_NO_DIRECT,
 ) -> VerifiedFlick | None:
     """Choose a flick for a team by simulating candidate flicks.
 
@@ -682,6 +810,13 @@ def plan_verified_team_flick(
     planned flick survives, or the best one is a step back, a repeat or a
     dead end, exploratory flicks around the ball are simulated
     too, and the one on the better level is used, the planned flick on a tie.
+
+    Bank passes (a pass off one wall, see ``bank_pass_candidates``) join the
+    planned flicks only when no planned flick reached the "advance" level,
+    that is no direct shot, setup, advance or pass survived simulation
+    (``BANK_ONLY_WHEN_NO_DIRECT``, Q7). At most ``MAX_BANK_CANDIDATES`` are
+    simulated, weakest first, and they are ranked like any other pass. There
+    are no bank shots (Q31).
     Exploratory flicks can find forward, sideways or backward moves the
     planner does not propose. If nothing better than a dead end exists, the
     exploratory contacts are tried once more at the stronger
@@ -701,6 +836,9 @@ def plan_verified_team_flick(
         max_sampled_candidates: Most exploratory flicks to simulate.
         visited_ball_positions: Where the ball has stopped earlier in this
             attack, including its current position. Used to detect loops.
+        bank_only_when_no_direct: When ``True`` (the rule for equal AI
+            players), bank passes are tried only if no direct flick reached
+            the advance level; when ``False``, they are always tried.
 
     Returns:
         VerifiedFlick | None: The best verified flick, or ``None`` if every
@@ -738,6 +876,32 @@ def plan_verified_team_flick(
         )
         if outcome.goal:
             break
+
+    has_direct = any(
+        entry[0][0] < STEP_BACK_CATEGORY for entry in planned
+    )
+    if not bank_only_when_no_direct or not has_direct:
+        banks = bank_pass_candidates(
+            [
+                (
+                    piece.body_id,
+                    piece.position,
+                    touch_counts.get(piece.body_id, 0),
+                )
+                for piece in attackers
+            ],
+            world.ball.position,
+            obstacles,
+            attack_direction=attack_direction(team),
+        )[:MAX_BANK_CANDIDATES]
+        for plan in banks:
+            outcome = simulate_plan(world, plan, touch_counts)
+            tried += 1
+            if not outcome.keeps_possession or not outcome.next_contact_available:
+                continue
+            planned.append(
+                (_rank_key(plan, outcome, visited_ball_positions), plan, outcome)
+            )
 
     best = _select(planned, checker, DEAD_END_CATEGORY)
     planned_level = LEVEL_DEAD_END + 1
@@ -783,7 +947,7 @@ def plan_verified_team_flick(
     return VerifiedFlick(sampled[0], sampled[1], tried, source="sampled")
 
 
-_Ranked = tuple[tuple[int, int, int, float, float], FlickPlan, FlickOutcome]
+_Ranked = tuple[_RankKey, FlickPlan, FlickOutcome]
 
 
 class _ShotChecker:
@@ -898,14 +1062,16 @@ def _sampled_rank_key(
     plan: FlickPlan,
     outcome: FlickOutcome,
     visited_ball_positions: Sequence[Vector2] = (),
-) -> tuple[int, int, int, float, float] | None:
+) -> _RankKey | None:
     """Rank an exploratory flick, or return ``None`` if it is not worthwhile.
 
     Forward progress is preferred. A flick that does not advance the ball is
     only worthwhile if it leaves the ball in reach of a teammate or inside the
     shooting area, which covers a deliberate step back or sideways. Among
     flicks on the same tier, one that leaves a teammate behind the ball is
-    preferred, so a step back sets up a forward move. A flick that returns the
+    preferred, so a step back sets up a forward move; then the same
+    possession-first order as ``_rank_key`` (near a teammate, not exposed,
+    more progress up to ``MAX_ADVANCE_MM``, lower strength). A flick that returns the
     ball to a position where it has already stopped ranks next to last, and a
     dead end (see ``FlickOutcome.dead_end``) ranks last.
     """
@@ -929,13 +1095,15 @@ def _sampled_rank_key(
         tier,
         0 if outcome.forward_contact_available else 1,
         0 if near_teammate else 1,
+        1 if outcome.exposed else 0,
+        -progress_steps(outcome.ball_progress_mm),
         plan.strength,
         outcome.ball_travel_mm,
     )
 
 
 def _sampled_level(
-    key: tuple[int, int, int, float, float],
+    key: _RankKey,
     outcome: FlickOutcome,
 ) -> int:
     """Map an exploratory flick's rank to the shared quality level.

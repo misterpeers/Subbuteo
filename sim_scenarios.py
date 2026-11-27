@@ -25,6 +25,7 @@ from sim_physics import (
     PhysicsWorld,
     Vector2,
     attack_direction,
+    opposing_team,
 )
 from sim_turns import TurnController
 
@@ -33,6 +34,8 @@ DEFAULT_MAX_FLICKS = 30
 DEFAULT_MAX_SECONDS = 600.0
 MINIMUM_SEPARATION_MM = 2.0 * PIECE_RADIUS_MM + 6.0
 FAILURE_SEEDS_SHOWN = 10
+BLOCKER_MIN_BALL_GAP_MM = 60.0
+BLOCKER_MAX_X = 0.92
 
 
 @dataclass(frozen=True)
@@ -46,12 +49,16 @@ class ScenarioSetup:
         piece_positions: Starting positions of the attacking player pieces.
         ball_position: Starting position of the ball.
         obstacles: Areas the AI should avoid when planning.
+        blocker_positions: Starting positions of opposing player pieces that
+            stand still (test blockers; a full match does not use them). The
+            ball touching one loses possession as usual.
     """
 
     team: str
     piece_positions: tuple[Vector2, ...]
     ball_position: Vector2
     obstacles: tuple[Obstacle, ...] = ()
+    blocker_positions: tuple[Vector2, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -182,8 +189,21 @@ def build_world(setup: ScenarioSetup) -> PhysicsWorld:
         setup: The starting position to build.
 
     Returns:
-        PhysicsWorld: A world with the team's pieces and a ball.
+        PhysicsWorld: A world with the team's pieces, any opposing blockers
+            and a ball.
     """
+    opponent = opposing_team(setup.team)
+    blockers = [
+        Body(
+            body_id=f"{opponent}-b{index + 1}",
+            position=position,
+            radius_mm=PIECE_RADIUS_MM,
+            mass=22.0,
+            team=opponent,
+            friction_mm_s2=PIECE_FRICTION_MM_S2,
+        )
+        for index, position in enumerate(setup.blocker_positions)
+    ]
     pieces = [
         Body(
             body_id=f"{setup.team}-{index + 1}",
@@ -203,7 +223,7 @@ def build_world(setup: ScenarioSetup) -> PhysicsWorld:
         kind="ball",
         friction_mm_s2=BALL_FRICTION_MM_S2,
     )
-    return PhysicsWorld(pieces, ball)
+    return PhysicsWorld(pieces + blockers, ball)
 
 
 def run_scenario(
@@ -266,17 +286,23 @@ def random_setup(
     seed: int,
     team: str = HOME,
     piece_count: int = 3,
+    blocker_count: int = 0,
 ) -> ScenarioSetup:
     """Generate a reproducible random starting position.
 
     Positions are drawn in the team's own attacking frame and mirrored for a
     team that attacks toward decreasing X, so both teams face equivalent
-    problems for the same seed.
+    problems for the same seed. Blockers come from a separate generator, so
+    the attacking pieces and ball are the same for a seed whatever the
+    blocker count. Each blocker stands between the ball and the attacked
+    goal line (up to ``BLOCKER_MAX_X``), at least
+    ``BLOCKER_MIN_BALL_GAP_MM`` from the ball and clear of every other body.
 
     Args:
         seed: Seed that fully determines the setup.
         team: The attacking team.
         piece_count: Number of attacking player pieces.
+        blocker_count: Number of static opposing pieces to add.
 
     Returns:
         ScenarioSetup: The generated setup.
@@ -286,15 +312,21 @@ def random_setup(
     """
     if piece_count < 1:
         raise ValueError("At least one piece is required.")
+    if blocker_count < 0:
+        raise ValueError("The blocker count cannot be negative.")
     rng = Random(seed)
     placed: list[Vector2] = []
 
-    def sample(min_x: float, max_x: float) -> Vector2:
+    def sample(
+        min_x: float,
+        max_x: float,
+        source: Random = rng,
+    ) -> Vector2:
         """Draw a position that does not overlap any already placed body."""
         while True:
             candidate = Vector2(
-                rng.uniform(min_x, max_x),
-                rng.uniform(0.1, 0.9),
+                source.uniform(min_x, max_x),
+                source.uniform(0.1, 0.9),
             )
             if all(
                 Vector2(
@@ -309,13 +341,31 @@ def random_setup(
 
     ball = sample(0.3, 0.75)
     pieces = [sample(0.1, 0.7) for _ in range(piece_count)]
+    blocker_rng = Random(f"blockers:{seed}")
+    blockers: list[Vector2] = []
+    while len(blockers) < blocker_count:
+        candidate = sample(
+            min(ball.x, BLOCKER_MAX_X - 0.01),
+            BLOCKER_MAX_X,
+            blocker_rng,
+        )
+        gap = Vector2(
+            (candidate.x - ball.x) * PITCH_LENGTH_MM,
+            (candidate.y - ball.y) * PITCH_WIDTH_MM,
+        ).length
+        if gap < BLOCKER_MIN_BALL_GAP_MM:
+            placed.remove(candidate)
+            continue
+        blockers.append(candidate)
     if attack_direction(team) < 0:
         ball = Vector2(1.0 - ball.x, ball.y)
         pieces = [Vector2(1.0 - piece.x, piece.y) for piece in pieces]
+        blockers = [Vector2(1.0 - piece.x, piece.y) for piece in blockers]
     return ScenarioSetup(
         team=team,
         piece_positions=tuple(pieces),
         ball_position=ball,
+        blocker_positions=tuple(blockers),
     )
 
 
@@ -327,6 +377,7 @@ def run_batch(
     piece_count: int = 3,
     max_flicks: int = DEFAULT_MAX_FLICKS,
     verify_flicks: bool = True,
+    blocker_count: int = 0,
 ) -> BatchSummary:
     """Run many seeded random scenarios and collect their results.
 
@@ -337,6 +388,7 @@ def run_batch(
         piece_count: Number of attacking player pieces per scenario.
         max_flicks: Flicks allowed per scenario.
         verify_flicks: Whether flicks are simulated before use.
+        blocker_count: Static opposing pieces per scenario (testing only).
 
     Returns:
         BatchSummary: Per-seed results and outcome counts.
@@ -345,7 +397,7 @@ def run_batch(
     for offset in range(count):
         scenario_seed = seed + offset
         result = run_scenario(
-            random_setup(scenario_seed, team, piece_count),
+            random_setup(scenario_seed, team, piece_count, blocker_count),
             max_flicks=max_flicks,
             verify_flicks=verify_flicks,
         )
@@ -413,6 +465,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--pieces", type=int, default=3)
     parser.add_argument("--max-flicks", type=int, default=DEFAULT_MAX_FLICKS)
     parser.add_argument(
+        "--blockers",
+        type=int,
+        default=0,
+        help="Static opposing pieces between the ball and the goal (testing).",
+    )
+    parser.add_argument(
         "--no-verify",
         action="store_true",
         help="Use the planner's first choice without simulating it first.",
@@ -425,6 +483,7 @@ def main(argv: list[str] | None = None) -> None:
         piece_count=arguments.pieces,
         max_flicks=arguments.max_flicks,
         verify_flicks=not arguments.no_verify,
+        blocker_count=arguments.blockers,
     )
     print(format_summary(summary))
 

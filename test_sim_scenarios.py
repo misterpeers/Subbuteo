@@ -11,7 +11,9 @@ from sim_physics import (
     Vector2,
 )
 from sim_scenarios import (
+    BLOCKER_MIN_BALL_GAP_MM,
     ScenarioSetup,
+    build_world,
     format_summary,
     random_setup,
     run_batch,
@@ -36,6 +38,51 @@ class ScenarioHarnessTests(unittest.TestCase):
                     (position.y - other.y) * PITCH_WIDTH_MM,
                 ).length
                 self.assertGreaterEqual(separation, 2 * PIECE_RADIUS_MM)
+
+    def test_blockers_do_not_change_the_rest_of_the_setup(self) -> None:
+        """Adding blockers keeps the same pieces and ball for a seed."""
+        plain = random_setup(7, HOME, 3)
+        blocked = random_setup(7, HOME, 3, blocker_count=2)
+
+        self.assertEqual(plain.blocker_positions, ())
+        self.assertEqual(plain.piece_positions, blocked.piece_positions)
+        self.assertEqual(plain.ball_position, blocked.ball_position)
+        self.assertEqual(blocked, random_setup(7, HOME, 3, blocker_count=2))
+
+    def test_blockers_stand_ahead_of_the_ball_and_clear_of_it(self) -> None:
+        """Each blocker is ahead of the ball, away from it, and opposing."""
+        for seed in range(20):
+            setup = random_setup(seed, HOME, 3, blocker_count=2)
+            self.assertEqual(len(setup.blocker_positions), 2)
+            for blocker in setup.blocker_positions:
+                with self.subTest(seed=seed):
+                    self.assertGreaterEqual(
+                        blocker.x,
+                        setup.ball_position.x - 0.01,
+                    )
+                    gap = Vector2(
+                        (blocker.x - setup.ball_position.x) * PITCH_LENGTH_MM,
+                        (blocker.y - setup.ball_position.y) * PITCH_WIDTH_MM,
+                    ).length
+                    self.assertGreaterEqual(gap, BLOCKER_MIN_BALL_GAP_MM)
+            world = build_world(setup)
+            self.assertEqual(
+                sum(1 for piece in world.pieces if piece.team == AWAY),
+                2,
+            )
+
+    def test_away_blockers_mirror_the_home_blockers(self) -> None:
+        """Blockers are mirrored with the rest of the setup."""
+        home = random_setup(3, HOME, 3, blocker_count=2)
+        away = random_setup(3, AWAY, 3, blocker_count=2)
+
+        self.assertEqual(len(away.blocker_positions), 2)
+        for home_blocker, away_blocker in zip(
+            home.blocker_positions,
+            away.blocker_positions,
+        ):
+            self.assertAlmostEqual(away_blocker.x, 1.0 - home_blocker.x)
+            self.assertAlmostEqual(away_blocker.y, home_blocker.y)
 
     def test_away_setup_mirrors_the_home_setup(self) -> None:
         """Both teams face the same problem, reflected along X."""

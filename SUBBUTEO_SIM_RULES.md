@@ -56,6 +56,7 @@ Use these terms consistently in project discussions, documentation, and code:
 | **Shooting area** | The region strictly inside the 280 mm shooting line at the target goal. Shot eligibility is evaluated from the ball center when the flick begins. |
 | **Penalty area (18-yard box)** | The larger marked area in front of the goal. Goal-line possession transfers occur only within the overlapping goal-line spans of this area and the goal area. |
 | **Goal area (6-yard box)** | The smaller marked area inside the penalty area. The ball must contact the goal-line span within both areas for possession to transfer. |
+| **Bank pass** | A pass that deliberately rebounds off a boundary wall on its way to a teammate. There are no deliberate bank shots on goal. |
 | **Goal mouth** | The opening between the goalposts; the only opening in the pitch perimeter. |
 
 ## Pitch and physical specifications
@@ -299,11 +300,19 @@ This choice is for testing and will be reviewed.
   not need to use all three flicks with one piece. A different player piece
   may take the next flick if it can legally contact the ball, including from
   a diagonal approach.
-- Prefer short, controlled flicks and nearby passes that keep the ball within
-  safe reach of a friendly player piece. Among safe continuations, prefer the
-  lower required flick strength, then the shorter ball movement. A longer or
-  stronger flick remains valid when it is the safest way to continue
-  possession; do not use power merely to maximize distance.
+- **Balanced advance rule (possession first):** prefer controlled flicks and
+  nearby passes that keep possession safe. Among legal continuations, rank
+  possession safety first: a player piece is left behind the ball for the
+  next touch, the ball stops within safe reach of a friendly player piece,
+  and no defending piece could block-flick into the gap between the next
+  attacking piece and the ball within its strength cap (an "exposed"
+  position ranks lower but is not forbidden). Among equally safe options,
+  prefer more forward progress, up to a balanced limit of **100 mm** of ball
+  movement per flick, then the lower required flick strength. Progress
+  beyond the limit earns nothing extra, and power is never used merely to
+  maximize distance. The 100 mm limit is provisional, to be tuned in
+  testing; possession-based and counter-attacking styles that change it
+  are a later per-team option.
 - After the third consecutive flick, the ball must touch another friendly
   figure, an opposing figure, or the opposing goalkeeper to reset that
   figure's touch counter. A fourth consecutive flick is not allowed.
@@ -461,16 +470,18 @@ Apply these priorities in order; a higher priority overrides a lower one.
    millimeters) **and** there is a clear vector to the goal mouth, shoot.
 2. **Keep possession and avoid fouls:** Contact the ball before any defender.
    If a direct path risks illegal contact, choose another figure; consider a
-   bank shot or bank pass only when no direct shot or pass works (see
-   [Clear lanes and bank shots](#clear-lanes-and-bank-shots)). The attacking player may choose any available player piece for a
-   flick; it need not use all three touches with the current piece. Prefer a
-   controlled move that keeps the ball close to a teammate, selecting the
-   lower required flick strength and then the least ball travel among safe
-   options. A longer or stronger flick is appropriate when it is the safest
-   way to continue possession; do not maximize distance for its own sake.
+   bank pass only when no direct pass works (see
+   [Clear lanes and bank passes](#clear-lanes-and-bank-passes)). Never aim a
+   shot off a wall. The attacking player may choose any available player piece for a
+   flick; it need not use all three touches with the current piece. Follow
+   the balanced advance rule (see [Attacking flicks](#attacking-flicks)):
+   possession safety first (a piece behind the ball, the ball near a
+   teammate, not exposed to a block-flick), then more progress up to
+   100 mm, then lower flick strength. Do not maximize distance for its own
+   sake.
    
    **Touch strategy:**
-   - **Touches 1-2:** Advance the ball forward with decreasing power, keeping it within safe reach of a teammate.
+   - **Touches 1-2:** Advance the ball forward under the balanced advance rule, keeping it within safe reach of a teammate.
    - **Touch 3 (Critical decision point):** Choose one of:
      - **Shot** (if scoring conditions are met)
      - **Direct Pass** (traditional pass to a teammate)
@@ -506,7 +517,7 @@ In each case, move the piece closest to the ball that can legally reach the
 blocking position within its strength cap. If a piece already blocks that
 route, block the next most useful route with a different piece instead.
 
-### Clear lanes and bank shots
+### Clear lanes and bank passes
 
 - **Clear lane:** A shot or pass has a clear lane if simulating the flick with
   the real physics, on a copy of the current board, gives the intended result
@@ -514,12 +525,14 @@ route, block the next most useful route with a different piece instead.
   piece's footprint and for wall rebounds with their restitution. No separate
   minimum clearance is defined. The defender uses the same check. This rule is
   provisional and will be reviewed in testing.
-- **Bank shot:** A shot or pass that deliberately rebounds off a boundary wall
-  (a touchline, or a goal line outside the goal mouth) on its way to the goal
-  or a teammate. The attacker considers a bank shot or bank pass only when no
-  direct shot or pass has a clear lane.
-- Within the final 280 mm, attacker priorities favor direct shots, then bank
-  shots, toward goal.
+- **Bank pass:** A pass that deliberately rebounds off a boundary wall (a
+  touchline, or a goal line outside the goal mouth) on its way to a
+  teammate. The attacker considers a bank pass only when no direct pass has
+  a clear lane.
+- **No bank shots:** The attacker never deliberately aims a shot on goal off
+  a wall; shots are direct. A flick whose ball happens to rebound off a wall
+  is still legal and may score; only deliberate wall aiming at the goal is
+  excluded.
 
 ## Engine state cycle
 
@@ -558,7 +571,11 @@ turn controller.
 - **Attacking AI:** Per-team planning of shots, short advances, direct passes,
   and third-touch setup passes, with the three-consecutive-touch limit,
   approach paths that avoid teammates and obstacles, and the shot > setup >
-  possession priority order. Shots are aimed at several points across the
+  possession priority order. Advances are offered at 30, 60 and 100 mm of
+  ball movement and ranked by the balanced advance rule (possession safety,
+  then progress up to 100 mm, then strength). The "exposed" test uses the
+  block-flick strength cap; it has no effect until defending pieces are on
+  the pitch. Shots are aimed at several points across the
   goal mouth (the center and points 20 mm and 38 mm to either side, keeping
   the ball inside the posts), and simulation picks one that scores.
 - **Simulation-verified flicks:** Before a flick is used, it is simulated on a
@@ -569,6 +586,14 @@ turn controller.
   to the ball. If no planner candidate survives, exploratory flicks around the
   ball are simulated, which allows sideways and backward moves when they leave
   the ball near a teammate or in the shooting area.
+- **Bank passes:** When no direct shot, setup, advance or pass survives
+  simulation, the planner proposes passes that rebound off one wall: either
+  touchline, or the attacked goal line outside the goal-area span (where a
+  touch would hand possession over). The team's own goal line is never
+  used. The aim allows for the wall's 0.65 restitution, and simulation
+  confirms the pass reaches the teammate. There are no bank shots. The
+  trigger is one named setting, so a later intelligence trait can widen
+  it.
 - **Deliberate step back and loop guard:** A flick that moves the ball more
   than 50 mm back is treated as a step back and is used only when no forward or
   sideways move survives; among step backs, one that leaves a piece behind the
@@ -593,9 +618,13 @@ turn controller.
 - **Scenario harness:** Seeded random attacking scenarios run headlessly to
   report goal rate, flicks per goal, outcome counts, decision statistics and
   reproducible failing seeds. Reference result, 100 seeds with three pieces:
-  98% goal rate (11.7 flicks per goal for the home team, 11.8 for the away
-  team) with verification, against 23% without it. With four pieces, as in a
-  5-a-side team: 99% (12.5 flicks per goal).
+  100% goal rate (5.4 flicks per goal)
+  with verification, against 23% without it. With four pieces, as in a
+  5-a-side team: 100% (5.4 flicks per goal). For testing only, the harness
+  can add static opposing pieces between the ball and the goal; with two
+  of them the goal rate stays at 100% (5.6 flicks per goal with three
+  pieces, 5.7 with four), and bank passes are used in about 2% of
+  decisions.
 - **Rendering:** Pitch, score bug, timer, start menu, and piece rendering.
 
 ### Not yet implemented
@@ -614,9 +643,9 @@ turn controller.
   example intelligence and risk, rated 0 to 100) are a later stage, after a
   full match works; candidate traits are logged in
   [AI_QUERIES.md](AI_QUERIES.md).
-- **Clear-lane and bank-shot logic:** The geometric planner assumes straight
-  ball paths. Simulation now checks the real result, including wall rebounds,
-  but the planner does not deliberately propose bank shots and does not
+- **Clear-lane logic:** The geometric planner assumes straight ball paths
+  and does not see other pieces; simulation checks the real result,
+  including wall rebounds and every piece's footprint. The planner does not
   account for moving defenders.
 - **Match flow:** Kick-off, halves, the real-time match clock, formations
   (including even `Y` spacing and the first 5-a-side 2-2 match), and restarts.
@@ -624,6 +653,6 @@ turn controller.
 - **No-move outcome:** A sequence still ends with a `no_plan` outcome if no
   safe flick exists. This no longer happens in the reference scenarios, but the
   outcome remains in code until the stuck attacker's move is built; the rules
-  allow no such outcome in a match (see "Stuck attacker"). A few slow attacks
-  (2%) reach the scenario harness's 30-flick cut-off, which is a test stop
-  only, not a game rule.
+  allow no such outcome in a match (see "Stuck attacker"). The scenario
+  harness also stops an attack at 30 flicks; this is a test stop only, not a
+  game rule, and no reference scenario reaches it.

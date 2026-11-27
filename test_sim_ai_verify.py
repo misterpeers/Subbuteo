@@ -1,6 +1,7 @@
 """Focused tests for headless what-if flick simulation."""
 
 import unittest
+from dataclasses import replace
 
 from sim_ai_brain import FlickPlan, plan_team_flick_candidates
 from sim_ai_verify import (
@@ -10,8 +11,10 @@ from sim_ai_verify import (
     FlickOutcome,
     _ball_progress_mm,
     _rank_key,
+    _sampled_rank_key,
     _select,
     has_next_contact,
+    is_exposed,
     plan_verified_team_flick,
     simulate_flick,
     simulate_plan,
@@ -387,6 +390,8 @@ def _outcome(
     forward_contact: bool = True,
     dead_end: bool = False,
     needs_shot_check: bool = False,
+    teammate_gap_mm: float = 20.0,
+    exposed: bool = False,
 ) -> FlickOutcome:
     """Create a possession-keeping outcome for ranking tests."""
     return FlickOutcome(
@@ -399,12 +404,13 @@ def _outcome(
         ball_position=ball_position,
         ball_travel_mm=abs(progress_mm),
         ball_in_shooting_area=False,
-        teammate_gap_mm=20.0,
+        teammate_gap_mm=teammate_gap_mm,
         settled=True,
         ball_progress_mm=progress_mm,
         forward_contact_available=forward_contact,
         dead_end=dead_end,
         needs_shot_check=needs_shot_check,
+        exposed=exposed,
     )
 
 
@@ -599,6 +605,195 @@ class RankingTests(unittest.TestCase):
 
         self.assertEqual(dead_end[0], DEAD_END_CATEGORY)
         self.assertLess(repeat, dead_end)
+
+
+class BalancedAdvanceTests(unittest.TestCase):
+    """Check the balanced, possession-first ranking and the exposed check."""
+
+    def test_longer_safe_advance_beats_a_short_one(self) -> None:
+        """Between equally safe advances, more progress wins over strength."""
+        short = _rank_key(
+            replace(_ADVANCE, strength=0.2),
+            _outcome(Vector2(0.53, 0.5), progress_mm=30.0),
+        )
+        long = _rank_key(
+            replace(_ADVANCE, strength=0.4),
+            _outcome(Vector2(0.58, 0.5), progress_mm=90.0),
+        )
+
+        self.assertLess(long, short)
+
+    def test_progress_beyond_the_limit_earns_nothing_more(self) -> None:
+        """Past 100 mm, lower strength decides again."""
+        limit = _rank_key(
+            replace(_ADVANCE, strength=0.4),
+            _outcome(Vector2(0.58, 0.5), progress_mm=100.0),
+        )
+        further = _rank_key(
+            replace(_ADVANCE, strength=0.6),
+            _outcome(Vector2(0.62, 0.5), progress_mm=150.0),
+        )
+
+        self.assertLess(limit, further)
+
+    def test_possession_safety_beats_progress(self) -> None:
+        """A short advance near a teammate beats a long one that is not."""
+        safe = _rank_key(
+            _ADVANCE,
+            _outcome(Vector2(0.53, 0.5), progress_mm=30.0),
+        )
+        far = _rank_key(
+            _ADVANCE,
+            _outcome(
+                Vector2(0.58, 0.5),
+                progress_mm=100.0,
+                teammate_gap_mm=250.0,
+            ),
+        )
+
+        self.assertLess(safe, far)
+
+    def test_exposed_advance_ranks_below_an_unexposed_one(self) -> None:
+        """Exposure outranks progress, for planned and sampled flicks."""
+        covered = _outcome(Vector2(0.53, 0.5), progress_mm=30.0)
+        exposed = _outcome(Vector2(0.58, 0.5), progress_mm=90.0, exposed=True)
+
+        self.assertLess(
+            _rank_key(_ADVANCE, covered),
+            _rank_key(_ADVANCE, exposed),
+        )
+        covered_key = _sampled_rank_key(_ADVANCE, covered)
+        exposed_key = _sampled_rank_key(_ADVANCE, exposed)
+        assert covered_key is not None and exposed_key is not None
+        self.assertLess(covered_key, exposed_key)
+
+    def test_opposing_piece_near_the_gap_exposes_it(self) -> None:
+        """A defender close beside the piece-to-ball gap can block it."""
+        attacker = _piece("home-1", HOME, Vector2(0.45, 0.5))
+        defender = _piece("away-1", AWAY, Vector2(0.47, 0.53))
+        world = _world([attacker, defender], Vector2(0.5, 0.5))
+
+        self.assertTrue(is_exposed(world, HOME, [attacker]))
+
+    def test_distant_opposing_piece_does_not_expose_the_gap(self) -> None:
+        """A defender beyond its capped reach cannot block."""
+        attacker = _piece("home-1", HOME, Vector2(0.45, 0.5))
+        defender = _piece("away-1", AWAY, Vector2(0.95, 0.1))
+        world = _world([attacker, defender], Vector2(0.5, 0.5))
+
+        self.assertFalse(is_exposed(world, HOME, [attacker]))
+
+    def test_no_opposing_pieces_is_never_exposed(self) -> None:
+        """Training and the harness have no defenders, so no exposure."""
+        attacker = _piece("home-1", HOME, Vector2(0.45, 0.5))
+        world = _world([attacker], Vector2(0.5, 0.5))
+
+        self.assertFalse(is_exposed(world, HOME, [attacker]))
+
+    def test_simulated_flick_reports_exposure(self) -> None:
+        """simulate_flick sets exposed when a defender sits by the gap."""
+        attacker = _piece("home-1", HOME, Vector2(0.45, 0.5))
+        beside = _piece("away-1", AWAY, Vector2(0.52, 0.535))
+        far = _piece("away-1", AWAY, Vector2(0.53, 0.9))
+
+        exposed = simulate_flick(
+            _world([attacker, beside], Vector2(0.48, 0.5)),
+            "home-1",
+            Vector2(0.48, 0.5),
+            0.3,
+        )
+        covered = simulate_flick(
+            _world([attacker, far], Vector2(0.48, 0.5)),
+            "home-1",
+            Vector2(0.48, 0.5),
+            0.3,
+        )
+
+        self.assertTrue(exposed.keeps_possession)
+        self.assertTrue(exposed.exposed)
+        self.assertTrue(covered.keeps_possession)
+        self.assertFalse(covered.exposed)
+
+
+def _blocked_lane_world(blocked: bool, team: str = HOME) -> PhysicsWorld:
+    """Create a final-touch pass whose direct lane may be blocked.
+
+    The passer stands diagonally behind the ball on its final touch, the
+    receiver is further up the pitch on the ball's line, and an opposing
+    piece may stand between them.
+
+    Args:
+        blocked: Whether to place the opposing piece in the direct lane.
+        team: The attacking team; the layout is mirrored for the away team.
+
+    Returns:
+        PhysicsWorld: The test world.
+    """
+
+    def fx(value: float) -> float:
+        """Mirror an X coordinate for the away team."""
+        return value if team == HOME else 1.0 - value
+
+    opponent = AWAY if team == HOME else HOME
+    pieces = [
+        _piece(f"{team}-1", team, Vector2(fx(0.30), 0.30)),
+        _piece(f"{team}-2", team, Vector2(fx(0.60), 0.25)),
+    ]
+    if blocked:
+        pieces.append(
+            _piece(f"{opponent}-b1", opponent, Vector2(fx(0.45), 0.25))
+        )
+    return _world(pieces, Vector2(fx(0.33), 0.25))
+
+
+class BankPassVerifyTests(unittest.TestCase):
+    """Check when bank passes are simulated and chosen."""
+
+    def test_blocked_lane_on_final_touch_uses_a_bank_pass(self) -> None:
+        """With the direct pass blocked, a bank pass reaches the receiver."""
+        for team in (HOME, AWAY):
+            with self.subTest(team=team):
+                result = plan_verified_team_flick(
+                    _blocked_lane_world(True, team),
+                    team,
+                    {f"{team}-1": 2},
+                )
+
+                self.assertIsNotNone(result)
+                assert result is not None
+                self.assertTrue(result.plan.bank)
+                self.assertEqual(result.plan.action, "pass")
+                self.assertEqual(result.outcome.receiver_id, f"{team}-2")
+                self.assertTrue(result.outcome.keeps_possession)
+
+    def test_open_lane_uses_a_direct_pass(self) -> None:
+        """When a direct flick works, no bank pass is chosen."""
+        result = plan_verified_team_flick(
+            _blocked_lane_world(False),
+            HOME,
+            {"home-1": 2},
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertFalse(result.plan.bank)
+
+    def test_setting_off_simulates_bank_passes_every_time(self) -> None:
+        """Turning the trigger off tries bank passes beside direct ones."""
+        world = _blocked_lane_world(False)
+        only_when_needed = plan_verified_team_flick(world, HOME, {"home-1": 2})
+        always = plan_verified_team_flick(
+            world,
+            HOME,
+            {"home-1": 2},
+            bank_only_when_no_direct=False,
+        )
+
+        assert only_when_needed is not None and always is not None
+        self.assertGreater(
+            always.candidates_tried,
+            only_when_needed.candidates_tried,
+        )
 
 
 class _FixedChecker:

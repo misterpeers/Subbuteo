@@ -16,42 +16,58 @@ kept). This section holds only the task and the baselines, and is rewritten
 when the user says "EXECUTE ORDER 66".
 
 **Commands and baselines** (confirmed at the end of the session on
-2026-11-26, after step 3.2):
+2026-11-27, after step 3.4; all runs 100 seeds from 0, home team):
 
 | Command | Expected |
 |---|---|
-| `python -m unittest discover -p "test_*.py"` | 121 tests passing (about 7 s) |
-| `python sim_scenarios.py --count 100 --seed 0 --team home` | 98% goal rate, 11.7 mean flicks per goal, 0 `no_plan`, 2 `flick_limit`; failing seeds 59, 91 (about 80 s) |
-| `python sim_scenarios.py --count 100 --seed 0 --team home --pieces 4` | 99% goal rate, 12.5 mean flicks per goal, 0 `no_plan`, 1 `flick_limit`; failing seed 67 (about 100 s) |
+| `python -m unittest discover -p "test_*.py"` | 148 tests passing (about 7 s) |
+| `python sim_scenarios.py --count 100 --seed 0 --team home` | 100% goal rate, 5.4 mean flicks per goal, 0 `no_plan`, 0 `flick_limit` (about 35 s) |
+| `python sim_scenarios.py --count 100 --seed 0 --team home --pieces 4` | 100% goal rate, 5.4 mean flicks per goal, 0 `no_plan`, 0 `flick_limit` (about 50 s) |
+| `python sim_scenarios.py --count 100 --seed 0 --team home --blockers 2` | 100% goal rate, 5.6 mean flicks per goal (about 65 s) |
+| `python sim_scenarios.py --count 100 --seed 0 --team home --pieces 4 --blockers 2` | 100% goal rate, 5.7 mean flicks per goal (about 85 s) |
 
-Decision time (mean / median / p95 / max): 3 pieces about 55 / 13 / 270 /
-740 ms; 4 pieces about 76 / 23 / 403 / 610 ms (timings vary by several
-percent between runs, the max much more). The away team (`--team away`)
-gives 98% and 11.8, with 0 `no_plan`; its two `flick_limit` seeds are 51 and
-59 (mirroring rounding, see "Known issues"). The 4-piece run is the 5-a-side
-reference; report both runs after every sub-step.
+Decision time (mean / median / p95 / max), runs made two at a time: 3
+pieces about 63 / 40 / 288 / 489 ms; 4 pieces about 91 / 65 / 329 / 652 ms;
+with 2 blockers about 110 / 63 / 515 / 842 ms (3 pieces) and 148 / 103 /
+618 / 1094 ms (4 pieces). Timings vary by several percent between runs, the
+max much more. Planned / sampled decisions: 487 / 54 (3 pieces), 500 / 41
+(4 pieces), 502 / 62 and 519 / 47 with blockers. The 4-piece run is the
+5-a-side reference. Report the two standard runs after every sub-step, and
+the blocker runs when a change affects blocked routes. `--blockers N` adds N
+static opposing pieces ahead of the ball (testing only; a full match does
+not use them). Run harness commands with `run_in_background`.
 
-**Task: continue step 3 with sub-step 3.3, longer advances under the
-balanced, possession-first rule** (Q29, Q30; details in "Planned work",
-step 3). The user approved step 3 and its sub-step plan on 2026-11-26; 3.0
-to 3.2 are done. At the start of the session:
+**Task: step 3 continues. Next is 3.5 (pieces as circles in the planner)
+or 3.6 (setup-pass search that scales), depending on the user's answer to
+Q32.** The user approved step 3 and its sub-steps on 2026-11-26; 3.0 to
+3.4 are done (3.3 longer advances under the balanced, possession-first
+rule; 3.4 bank passes, no bank shots). Details of both remaining sub-steps
+are under "Planned work", step 3. At the start of the session:
 
-1. Run the commands above and say whether the results match.
+1. Run the five commands above and say whether the results match.
 2. The user is tracking a visual check of the animation fix in
    `demo_ai_flick.py` themselves (verified headlessly only; see "Known
    issues"). Do not ask about it; act only if the user reports a problem.
-3. Give a short implementation plan for 3.3 and wait for the user's go-ahead
-   before changing code. Then implement 3.3, run the tests and both harness
-   runs, and report goal rate, flicks per goal and decision times against
-   the baselines above. Expected: fewer flicks per goal and seeds 59, 91 and
-   67 finishing.
-4. After 3.3, tell the user that the rules' "prefer lower strength, then
-   shorter travel" wording (turn-taking section and attacker priority 2) is
-   out of date, and offer to update it. Then continue with 3.4 (bank shots),
-   3.5 (circle obstacles, possibly dropped) and 3.6 (setup-pass search
-   scaling), one at a time with the user's approval.
+3. Read Q32 in `AI_QUERIES.md`. The user said on 2026-11-27 that they would
+   review it. 3.5 was measured that day: with static blockers the
+   planner's blind spot costs little (4 pieces, 4 blockers: 6% of planner
+   suggestions rejected for hitting a piece, 2.5% of decisions fell back,
+   still 100%), but real defenders will cost more. Options: A build 3.5
+   now, B defer until after the step 4 defenders and re-measure (suggested),
+   C drop.
+   - If A: plan 3.5 (every outfield piece of both teams as a circle in the
+     planner's path checks; goalkeeper rectangle later, after Q11).
+   - If B or C, or no answer yet: say so and plan 3.6 (only receivers in
+     flick range, closest first, stop at a setup that leads to a shot;
+     check 4-piece decision time, p95 about 330 ms today).
+   Either way, give the plan and wait for the user's go-ahead before
+   changing code.
+4. The rules and `MODULES.md` are up to date for 3.3 and 3.4. Tell the user
+   if a change makes them out of date, and update them only when asked.
 5. After step 3: step 4, defenders for equal AI players, two in training.
-   All its questions are answered.
+   All its questions are answered. The "exposed" check (3.3),
+   `block_flick_cap` and the `--blockers` option are ready for it. If Q32
+   is B, re-measure the planner's piece rejections once defenders exist.
 
 If the user gives a different instruction, follow it.
 
@@ -70,11 +86,19 @@ If the user gives a different instruction, follow it.
 - Terminology: **player** is the AI decision-maker; **player piece** is a
   flicked figure.
 - Barlow fonts in `assets/fonts/` for UI text.
-- Tests: `python -m unittest discover -p "test_*.py"` (121 passing, about 7 s).
-  Pyflakes and the Pylance MCP server were not available in earlier sessions; a
+- Tests: `python -m unittest discover -p "test_*.py"` (148 passing, about 7 s).
+- Never use `git stash` to compare with the committed code: running Python
+  rewrites the tracked `__pycache__/*.pyc` files and blocks `git stash pop`
+  (it happened on 2026-11-27 and was recovered with `git checkout --
+  __pycache__` then `git stash pop`). Use `git show HEAD:<file>` into the
+  scratchpad instead.
+- Pyflakes and the Pylance MCP server were not available in earlier sessions; a
   temporary `pip install --target` of pyflakes into the temp folder worked for
-  linting.
-- The 100-scenario harness run takes about 80 seconds with verification on.
+  linting. The 2026-11-27 changes were not linted.
+- A 100-scenario harness run takes about 35 s (3 pieces) to 50 s (4 pieces)
+  since step 3.3, longer with blockers. Run harness commands with
+  `run_in_background` and wait for the notification; do not start them as a
+  detached shell job (`&`), which gives no notification.
 - Environment (checked 2026-11-24): Python 3.13.5, pygame 2.6.1. pymunk is not
   installed and nothing imports it.
 - Tooling note for Claude Code on this machine: multi-line Python passed to the
@@ -126,7 +150,9 @@ Baseline history (`python sim_scenarios.py --count 100 --seed 0 --team home`,
 | Plus sampled fallback (step 1) | 74% | 14.2 | 18 no_plan, 8 flick_limit |
 | Plus step 2.1 to 2.4 (2026-11-24) | 93% | 12.7 | 5 no_plan, 2 flick_limit |
 | Plus step 2.5 dead-end lookahead (2026-11-26) | 98% | 12.2 | 2 flick_limit |
-| Plus step 3.1 merge and 3.2 shot aims (2026-11-26) | **98%** | **11.7** | 2 flick_limit |
+| Plus step 3.1 merge and 3.2 shot aims (2026-11-26) | 98% | 11.7 | 2 flick_limit |
+| Plus step 3.3 longer advances (2026-11-27) | 100% | 5.5 | none |
+| Plus step 3.4 bank passes (2026-11-27) | **100%** | **5.4** | none |
 
 Things learned:
 
@@ -182,8 +208,8 @@ Answered on 2026-11-24 in `AI_QUERIES.md` (all now in the rules file):
 
 - **Q6:** clear lanes are judged by simulating the flick ("simulate and see"),
   for now; no explicit clearance rule.
-- **Q7:** bank shots and bank passes are proposed only when no direct shot or
-  pass survives simulation.
+- **Q7:** bank passes are proposed only when no direct pass survives
+  simulation (bank shots were later ruled out, Q31).
 - **Q10:** formation lines with unspecified Y use even spacing, for now. The
   rules write this as `Y = k / (n + 1)` for `n` figures in a line; the user may
   want to confirm the formula.
@@ -218,9 +244,52 @@ approved; 3.0 to 3.2 done in `sim_ai_brain.py`, `test_sim_ai_brain.py` and
 (harness reference result with the 4-piece figure; shot aim points under
 "Attacking AI") and `MODULES.md` (`sim_ai_brain.py` merged planning and shot
 aim, `--pieces` and `--max-flicks`, tests table) were updated for 3.1 and
-3.2. After 3.3, the rules' "prefer lower strength, then shorter travel"
-wording (turn-taking section and attacker priority 2) must change to the
-balanced, possession-first rule (Q30); tell the user.
+3.2. (The rules' strength-first wording was replaced by the balanced,
+possession-first rule on 2026-11-27, at the user's request.)
+
+Session on 2026-11-27: start-of-session baselines matched (121 tests; 98% /
+11.7 and 99% / 12.5). The user approved the 3.3 plan and it was built in
+`sim_ai_brain.py`, `sim_ai_verify.py`, `test_sim_ai_brain.py` and
+`test_sim_ai_verify.py` (results under step 3). At the user's request,
+`SUBBUTEO_SIM_RULES.md` was then updated for 3.3: a "balanced advance rule
+(possession first)" bullet replaces the "lower strength, then shorter
+travel" wording under "Attacking flicks", attacker priority 2 and the
+touches 1-2 line refer to it, and "Implementation status" has the advance
+distances, the exposure test and the new reference figures (100%, 5.5 and
+5.3; no scenario reaches the 30-flick stop). `MODULES.md` was updated for
+the advance functions, `block_flick_cap`, `is_exposed`, the new ranking
+order and the tests table. A 3.4 plan was proposed (step 3). The user
+ruled out bank shots (Q31) and asked for "bank shot" to be renamed "bank
+pass" in the docs, which was done (rules, queries, this file). The user then
+approved 3.4 as amended, with static opposing pieces for testing; it was
+built in `sim_ai_brain.py`, `sim_ai_verify.py`, `sim_scenarios.py` and the
+three matching test files. At the user's request, the rules'
+"Implementation status" (new "Bank passes" item, harness reference figures
+with the blocker results, "Clear-lane logic" in place of "Clear-lane and
+bank-pass logic") and `MODULES.md` (`FlickPlan.bank`, the bank-pass
+functions, the bank stage, limits, `--blockers` and blocker placement, the
+tests table, the flick flow) were then updated for 3.4. Then 3.5 was
+measured (step 3) and the user was asked Q32 (build now, defer, or drop);
+the user is reviewing it. Session ended with "EXECUTE ORDER 66" after the
+final test and harness runs.
+
+Files changed on 2026-11-27: `sim_ai_brain.py`, `sim_ai_verify.py`,
+`sim_scenarios.py`, `test_sim_ai_brain.py`, `test_sim_ai_verify.py`,
+`test_sim_scenarios.py`, `SUBBUTEO_SIM_RULES.md`, `MODULES.md`,
+`AI_QUERIES.md` (Q31, Q32, notes under Q7 and T1, status table), this file,
+and the tracked `__pycache__` files.
+
+Decisions on 2026-11-27:
+
+- **Q31 (revises Q7):** no deliberate bank shots on goal; bank passes are
+  allowed (only when no direct pass works); accidental rebounds from
+  exploratory flicks are still accepted. At the user's request the rules
+  now say **bank pass** throughout: the section is "Clear lanes and bank
+  passes", the dictionary defines "Bank pass", attacker priority 2 and the
+  implementation status use it, and a "No bank shots" rule was added. Use
+  "bank pass" in code and discussion.
+- Static opposing pieces may be used in the harness for testing; a full
+  match does not need them.
 
 Decisions on 2026-11-26:
 
@@ -244,8 +313,8 @@ Decisions on 2026-11-26:
   match works with **equal AI players**. Until then no traits, trait profile
   or per-team skill values are built. Tunable behaviour stays in named
   settings that a trait can drive later.
-- **Q7 addition:** a high-intelligence player would try bank shots more
-  (traits stage, T1). No code change now; step 3 builds bank shots for equal
+- **Q7 addition:** a high-intelligence player would try bank passes more
+  (traits stage, T1; bank shots ruled out by Q31). No code change now; step 3 builds bank passes for equal
   players, only when no direct route survives, with that trigger as one named
   setting.
 - **Q25 answered:** 0.0 to 1.0 in code, 0 to 100 on screen; skip probability
@@ -361,12 +430,9 @@ What was built:
   - The touch-1 lookahead (planned as 2.5c) was not needed: all five seeds
     score.
 
-Remaining failures (home): `flick_limit` 59, 91.
-
-- **Still progressing (`flick_limit`, 59 and 91):** both were advancing steadily
-  when the harness's 30-flick cut-off stopped them. By the rules (no flick
-  limit) these are slow attacks, not loops. Slow progress is step 3 work
-  (`BALL_ADVANCE_MM = 30`).
+Remaining failures at the end of step 2 (home): `flick_limit` 59, 91, slow
+attacks stopped by the 30-flick cut-off. Resolved by step 3.3 (longer
+advances): every seed now scores.
 
 Design decisions in force (from Q17, Q21): fallback order is normal move, then
 deliberate step back (then repeat, then dead end, as ranking levels), then
@@ -380,7 +446,7 @@ Notes: `_plan_piece_flick` still rejects any advance with
 `plan.ball_target.x < ball_position.x`, and the advance waypoints are fixed
 points near the opponent's goal.
 
-### 3. Remove remaining hard-coded geometry (approved 2026-11-26; 3.0 to 3.2 done; 3.3 next)
+### 3. Remove remaining hard-coded geometry (approved 2026-11-26; 3.0 to 3.4 done; 3.5 waits on Q32, then 3.6)
 
 Results so far (100 seeds from 0, home):
 
@@ -390,8 +456,75 @@ Results so far (100 seeds from 0, home):
 | 3.0 baseline (after step 2) | 4 | 99% | 12.7 | 1 (seed 67) | 79 / 22 / 430 / 889 (CPU shared with tests) |
 | 3.1 merge + 3.2 shot aims | 3 | 98% | 11.7 | 2 | 53 / 12 / 266 / 723 |
 | 3.1 merge + 3.2 shot aims | 4 | 99% | 12.5 | 1 (seed 67) | 76 / 23 / 403 / 610 |
+| 3.3 longer advances | 3 | **100%** | **5.5** | 0 | 62 / 38 / 295 / 407 |
+| 3.3 longer advances | 4 | **100%** | **5.3** | 0 | 95 / 63 / 407 / 709 |
+| 3.3, with 2 blockers | 3 | 100% | 5.8 | 0 | 118 / 66 / 571 / 837 |
+| 3.3, with 2 blockers | 4 | 100% | 5.5 | 0 | 163 / 104 / 717 / 1222 |
+| 3.4 bank passes | 3 | **100%** | **5.4** | 0 | 60 / 38 / 259 / 410 |
+| 3.4 bank passes | 4 | **100%** | **5.4** | 0 | 89 / 64 / 321 / 597 |
+| 3.4, with 2 blockers | 3 | 100% | 5.6 (8 of 564 decisions banked) | 0 | 111 / 65 / 527 / 810 |
+| 3.4, with 2 blockers | 4 | 100% | 5.7 (13 of 566 decisions banked) | 0 | 150 / 102 / 609 / 1050 |
 
 What was built:
+
+- **3.4** (2026-11-27, bank passes only, Q31). In `sim_ai_brain.py`:
+  `FlickPlan.bank`; `_ball_contact_plan` takes an optional
+  `ball_launch_speed_mm_s`; `bank_bounce_point()` (mirror image at the
+  target's wall distance / `WALL_RESTITUTION`; refuses opposite sides,
+  bounces within `BANK_WALL_MARGIN_MM` = 20 mm of a corner, and goal-line
+  bounces within the goal-area span plus that margin); `_bank_walls()`
+  (both touchlines and the attacked goal line, never the own goal line);
+  `_bank_pass_plans()` (launch speed covers both legs and the speed kept
+  at the bounce; offered at `BANK_STRENGTH_FACTORS` = 0.9, 1.0, 1.15);
+  `bank_pass_candidates()` (every piece with touches left to every
+  teammate, mirrored per team, weakest first). `_mirror_plan` now uses
+  `dataclasses.replace` so new fields carry over. In `sim_ai_verify.py`:
+  `BANK_ONLY_WHEN_NO_DIRECT = True`, `MAX_BANK_CANDIDATES = 20`, and a
+  bank stage in `plan_verified_team_flick` (parameter
+  `bank_only_when_no_direct`) that runs when no planned entry has a
+  category below `STEP_BACK_CATEGORY`, simulates the bank passes and adds
+  them to the planned entries before `_select`. In `sim_scenarios.py`:
+  `ScenarioSetup.blocker_positions`, `random_setup(..., blocker_count)`
+  (separate `Random(f"blockers:{seed}")`, ahead of the ball up to
+  `BLOCKER_MAX_X` = 0.92, at least `BLOCKER_MIN_BALL_GAP_MM` = 60 mm from
+  it), opposing bodies in `build_world`, `run_batch(blocker_count=...)` and
+  `--blockers`. 13 new tests (7 brain, 3 verify, 3 scenarios).
+- Learned: a passer straight behind the ball cannot bank it sharply off a
+  touchline (the contact angle is too oblique), so bank passes come from
+  pieces diagonally behind the ball. The bank stage also runs when the best
+  direct flick is only a step back, which is why the standard runs changed
+  slightly (5.5 to 5.4, and 5.3 to 5.4 with four pieces). With two random
+  blockers, bank passes are used in about 1.5 to 2.5% of decisions. The
+  bank count came from a scratch script that wraps
+  `sim_turns.plan_verified_team_flick`; the harness itself does not report
+  it.
+
+- **3.3** (2026-11-27, approved by the user the same day). In
+  `sim_ai_brain.py`: `ADVANCE_DISTANCES_MM = (30, 60, 100)`,
+  `MAX_ADVANCE_MM = 100` (the balanced limit; a later `risk` trait or style
+  sets it, T2), `PROGRESS_STEP_MM = 10`. `_ball_advance_waypoints` places a
+  target at each distance toward each progress area (deduplicated).
+  `_piece_advance_plans` lists one piece's advances; `_advances_by_distance`
+  keeps the weakest advance per distance, so team candidates offer up to
+  three advances per piece, listed by progress (`progress_steps`, 10 mm
+  steps capped at 100 mm) then strength. `plan_piece_flick` (single plan)
+  still returns the weakest advance. `BALL_ADVANCE_MM = 30` remains for the
+  setup-pass receiver check (`_angled_advance_waypoints`).
+  `block_flick_cap(distance_mm)` gives the Q22 cap (20% to 60%, linear
+  from 100 to 400 mm), for reuse by step 4. In `sim_ai_verify.py`:
+  `FlickOutcome.exposed` from `is_exposed()` (the nearest next piece
+  behind the ball, else the nearest next piece; exposed if any opposing
+  field piece's base could slide onto the piece-to-ball segment within
+  `_flick_reach_mm(block_flick_cap(...))`; it does not check that block's
+  own legality). `_rank_key` and `_sampled_rank_key` are now (category,
+  forward contact, near teammate, exposed, -progress steps, strength,
+  travel), type `_RankKey`. 14 new tests (6 in `test_sim_ai_brain.py`, 8
+  in `test_sim_ai_verify.py`).
+- Learned: with progress before strength, advances run about 60 to 100 mm
+  and flicks per goal halved; no seed hits the 30-flick cut-off any more,
+  so the harness no longer separates small changes by `flick_limit`.
+  Decisions simulate more candidates (median time up from 13 to 38 ms with
+  3 pieces), but the 4-piece p95 is unchanged at about 400 ms.
 
 - **3.1** `_ball_followup_plan` removed. `_plan_piece_flick` is the single
   shot / pass / advance decision; the setup-pass search calls it with
@@ -405,8 +538,9 @@ What was built:
   scores. 3 new tests (two in `test_sim_ai_brain.py`, one in
   `test_sim_ai_verify.py` with an opposing piece on the centre line).
 
-Decided: **Q6** clear lanes are judged by simulation; **Q7** bank shots and
-passes are proposed only when no direct shot or pass survives simulation.
+Decided: **Q6** clear lanes are judged by simulation; **Q7** with **Q31**:
+bank passes are proposed only when no direct pass survives simulation, and
+there are no bank shots.
 **Q29** answered: a standard **balanced** style for equal players
 (possession and counter-attack styles later, with traits); the user is
 concerned that a long advance lets a defender get between attacker and ball.
@@ -414,14 +548,14 @@ concerned that a long advance lets a defender get between attacker and ball.
 Ranking order: possession safety first (piece behind the ball, ball near a
 teammate, and from step 4 not "exposed", that is no defending piece able to
 block-flick into the gap between the next attacking piece and the ball
-within its cap), then progress up to 100 mm, then lower strength. The rules
-text ("lower strength, then shorter travel") will need updating once 3.3 is
-built; tell the user rather than editing it unasked.
+within its cap), then progress up to 100 mm, then lower strength. Built in
+3.3; the rules text was updated to match on 2026-11-27.
 
-Context from the user (2026-11-26): rectangular obstacles exist only for the
-training test of flicking around large obstacles; a full match has none. So
-3.5 is about treating real pieces (defenders) as circles in the planner's
-pre-check, and may be dropped if simulation alone is enough.
+Context from the user (2026-11-26, extended 2026-11-27): rectangular
+obstacles exist only for the training test of flicking around large
+obstacles; in a full match the only rectangular piece is the goalkeeper. So
+3.5 is about treating real pieces as circles in the planner's pre-check
+(see 3.5 and Q32).
 
 Sub-steps approved by the user (each followed by the tests and both harness
 runs, 3 and 4 pieces):
@@ -429,7 +563,8 @@ runs, 3 and 4 pieces):
 - 3.0 4-piece baseline: **done**.
 - 3.1 Merge the duplicated shot / advance / pass logic: **done**.
 - 3.2 Shot aim across the goal mouth: **done**.
-- 3.3 **Longer advances, next.** Agreed design:
+- 3.3 **Longer advances: done 2026-11-27** (see "What was built"). Agreed
+  design, as built:
   - Offer advances at several distances toward each target (for example 30,
     60 and 100 mm). `BALL_ADVANCE_MM` becomes the balanced limit, 100 mm, a
     named setting (a later style or `risk` trait sets it per team, T2).
@@ -453,12 +588,62 @@ runs, 3 and 4 pieces):
     (4 pieces) finishing.
   - Afterwards tell the user that the rules' "prefer lower strength, then
     shorter travel" wording is out of date.
-- 3.4 Bank shots and passes (Q7): only when no direct shot or pass survives
+- 3.4 **Bank passes: done 2026-11-27** (Q7; **Q31: no bank shots**, bank passes
+  allowed, accidental rebounds allowed). Original wording, now superseded
+  for shots: only when no direct shot or pass survives
   simulation (trigger as one named setting, T1 may widen it later). Aim at
   the target's reflection in a touchline, or a goal line outside the mouth,
   with the target's distance from the wall divided by the 0.65 restitution;
-  simulation confirms the path.
-- 3.5 Circle obstacles: treat real pieces as circles in the planner's
+  simulation confirms the path. The physics scales only the velocity
+  component across the wall by `WALL_RESTITUTION` (`_reflect_velocity`), so
+  the 1/0.65 mirror is exact apart from friction.
+  Amended plan, approved and built 2026-11-27: `FlickPlan.bank` flag
+  (action stays `pass`); `bank_pass_plans` in `sim_ai_brain.py` (bounce
+  line offset by the ball radius, strength from the two legs with the
+  speed lost at the bounce, offered at 0.9x, 1x and 1.15x); walls are the
+  touchlines and the attacked goal line outside the goal-area span (never
+  the team's own goal line, to avoid own goals); a bank stage in
+  `plan_verified_team_flick` after the planned candidates, controlled by
+  `BANK_ONLY_WHEN_NO_DIRECT = True`, run when nothing planned survives or
+  the best planned flick is below advance level, capped at
+  `MAX_BANK_CANDIDATES`; same ranking as other flicks. No bank shot code;
+  a test confirms no planned shot is aimed off a wall. Harness: new
+  `--blockers N` option (approved by the user for testing only, not
+  needed in a full match) adds N static opposing pieces from a separate
+  seeded generator, so `--blockers 0` reproduces today's results exactly.
+- 3.5 **Circle obstacles, next.** User clarification (2026-11-27): in a full
+  match the only rectangular piece is the goalkeeper; there are no static
+  rectangles as in training. So in a match the planner's pre-check would
+  otherwise see nothing but the goalkeeper, which makes 3.5 likely needed
+  (lean toward building it; measure first with `--blockers` for a
+  before/after figure). Scope: every outfield piece of both teams as a
+  circle of its real radius; the goalkeeper as an axis-aligned rectangle
+  (the existing `Obstacle` shape fits) at the goalkeeper stage, once Q11
+  (thickness) is answered; training rectangles kept until training mode is
+  retired.
+  **Measured 2026-11-27** (scratch script wrapping
+  `sim_turns.plan_verified_team_flick` and `sim_ai_verify.simulate_plan`,
+  100 seeds from 0, home; a "piece rejection" is a planner suggestion
+  rejected because the ball touched an opposing piece or the flicking piece
+  touched a piece before the ball):
+
+  | Pieces / blockers | Suggestions | Piece rejections | Decisions affected | Fell back (sampled or bank) after one | Flicks per goal |
+  |---|---|---|---|---|---|
+  | 3 / 0 | 2672 | 0 | 0 of 541 | 0 | 5.4 |
+  | 3 / 2 | 2728 | 55 (2%)* | 24 of 564 | 2 | 5.6 |
+  | 4 / 0 | 3260 | 0 | 0 of 541 | 0 | 5.4 |
+  | 4 / 2 | 3361 | 109 (3%) | 40 of 566 (7%) | 9 (1.6%) | 5.7 |
+  | 4 / 4 | 3423 | 207 (6%) | 75 of 593 (13%) | 15 (2.5%) | 5.9 |
+
+  \* The 3-piece blocker run counted a piece that hit a blocker and never
+  reached the ball as a miss, so it undercounts (the 4-piece rows use the
+  corrected order). Goal rate 100% in every run. The 12-suggestion cap cut
+  suggestions in 8 to 20 decisions per run, with or without blockers.
+  Reading: the cost grows with the number of opposing pieces but is still
+  small with static, randomly placed blockers; real defenders that stand in
+  lanes on purpose and move will cost more, so these are a lower bound.
+  Recommendation to the user: defer 3.5 to step 4 and re-measure with real
+  defenders (Q32). Original note: treat real pieces as circles in the planner's
   pre-check (rectangles are only for the training test). May be dropped if
   simulation alone is enough with defenders.
 - 3.6 Setup-pass search that scales: only receivers within flick range of
@@ -529,7 +714,9 @@ Required engine changes:
 - Training UI (`demo_ai_flick.py`): two draggable defenders in away colours with
   D1 and D2 labels, window timer and outcome messages, counters for goals,
   blocks, misses and fouls, and an `Obstacle`-style hand-off so the attacker's
-  planner sees defenders.
+  planner sees defenders (or, if Q32 is answered A or later built under B,
+  the circle obstacles from 3.5 instead). After the defenders work,
+  re-measure the planner's piece rejections as in 3.5 if Q32 is B.
 - `_training_player_pieces` in the demo filters by `TRAINING_PIECE_NUMBERS`;
   split attackers and defenders by team.
 
@@ -600,7 +787,8 @@ candidate list is the "Player traits (later stage)" section of
 stage by going through that list with the user, keeping, changing or removing
 each item. Decided so far: 0.0 to 1.0 in code, 0 to 100 on screen (Q25);
 defender skip probability equal to intelligence, seeded (Q25); more bank
-shots with higher intelligence (Q7); a `risk` trait (Q26).
+passes with higher intelligence (Q7; widen `BANK_ONLY_WHEN_NO_DIRECT`; no
+bank shots, Q31); a `risk` trait (Q26, driving `MAX_ADVANCE_MM`).
 
 ## Open questions for the user
 
@@ -609,19 +797,20 @@ records answers. Do not keep a second list here. Read it at the start of every
 session, because the user may have answered questions since this file was
 written, and an answer there overrides any default or assumption in this file.
 
-Open as of 2026-11-26 (see the status table at the top of `AI_QUERIES.md`):
+Open as of 2026-11-27 (see the status table at the top of `AI_QUERIES.md`):
 
 | ID | Topic | Needed for |
 |---|---|---|
 | Q11 | Goalkeeper collision thickness | Goalkeeper stage |
 | Q20 | Numeric rule for a setup pass (optional) | Nothing blocked |
+| Q32 | Build 3.5 now, defer to after step 4, or drop | Step 3.5 |
 | G1 to G4, T1 to T13 | Player traits log | Traits stage (6) |
 
-All others (Q1 to Q10, Q12 to Q19, Q21 to Q30) are answered and recorded
+All others (Q1 to Q10, Q12 to Q19, Q21 to Q31) are answered and recorded
 in "User decisions already made" above or in earlier sessions.
 
 If a question comes up that is not in `AI_QUERIES.md`, add it there (next free
-number, Q31 at the time of writing; trait ideas go in the traits log as T14
+number, Q33 at the time of writing; trait ideas go in the traits log as T14
 onward; suggested default; `**Your response: TBD**`
 line; and a row in its status table), and also ask in the session if it blocks
 the current task. Never change a response the user has written.

@@ -1,6 +1,6 @@
 """Headless AI player calculations for ball contact and scenario navigation."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from heapq import heappop, heappush
 from itertools import count
 from math import ceil, cos, hypot, pi, sin, sqrt
@@ -12,6 +12,7 @@ from sim_physics import (
     ATTACK_TOWARD_INCREASING_X,
     BALL_FRICTION_MM_S2,
     BALL_RADIUS_MM,
+    GOAL_AREA_WIDTH_MM,
     MAX_DRAG_MM,
     MAX_FLICK_SPEED_MM_S,
     MIN_FLICK_DRAG_MM,
@@ -20,12 +21,22 @@ from sim_physics import (
     PITCH_LENGTH_MM,
     PITCH_WIDTH_MM,
     SHOOTING_AREA_DEPTH_MM,
+    WALL_RESTITUTION,
     PhysicsWorld,
     Vector2,
 )
 
 FLICK_SAFETY_FACTOR = 0.88
 BALL_ADVANCE_MM = 30.0
+ADVANCE_DISTANCES_MM = (30.0, 60.0, 100.0)
+MAX_ADVANCE_MM = 100.0
+PROGRESS_STEP_MM = 10.0
+BLOCK_CAP_NEAR = 0.2
+BLOCK_CAP_FAR = 0.6
+BLOCK_CAP_NEAR_MM = 100.0
+BLOCK_CAP_FAR_MM = 400.0
+BANK_STRENGTH_FACTORS = (0.9, 1.0, 1.15)
+BANK_WALL_MARGIN_MM = 20.0
 SHOT_AIM_DEPTH_MM = 24.0
 SHOT_AIM_OFFSETS_MM = (0.0, -20.0, 20.0, -38.0, 38.0)
 SETUP_OFFSETS_MM = (15.0, 30.0)
@@ -83,7 +94,18 @@ class Scenario:
 
 @dataclass(frozen=True)
 class FlickPlan:
-    """Describe a player-piece flick that contacts the ball toward a waypoint."""
+    """Describe a player-piece flick that contacts the ball toward a waypoint.
+
+    Attributes:
+        piece_target: Normalized point the piece is flicked toward.
+        ball_target: Normalized point the ball is meant to reach.
+        strength: Flick strength from 0.0 to 1.0.
+        action: ``advance``, ``pass``, ``shot`` or ``setup``.
+        receiver_piece_id: The intended receiver of a pass or setup.
+        flicking_piece_id: The piece that flicks, when known.
+        bank: Whether the ball is meant to rebound off a wall on the way.
+            Only passes are ever banked; there are no bank shots.
+    """
 
     piece_target: Vector2
     ball_target: Vector2
@@ -91,6 +113,7 @@ class FlickPlan:
     action: Literal["advance", "pass", "shot", "setup"] = "advance"
     receiver_piece_id: str | None = None
     flicking_piece_id: str | None = None
+    bank: bool = False
 
 
 def _validated_direction(attack_direction: int) -> int:
@@ -129,13 +152,10 @@ def _mirror_plan(plan: FlickPlan | None, mirror: bool) -> FlickPlan | None:
     """Reflect a plan's targets along X when mirroring is requested."""
     if plan is None or not mirror:
         return plan
-    return FlickPlan(
+    return replace(
+        plan,
         piece_target=_mirror_position(plan.piece_target, True),
         ball_target=_mirror_position(plan.ball_target, True),
-        strength=plan.strength,
-        action=plan.action,
-        receiver_piece_id=plan.receiver_piece_id,
-        flicking_piece_id=plan.flicking_piece_id,
     )
 
 def _grid_position(position: Vector2, columns: int, rows: int) -> tuple[int, int]:
@@ -344,8 +364,25 @@ def _ball_contact_plan(
     ball_target: Vector2,
     obstacles: list[Obstacle],
     action: Literal["advance", "pass", "shot", "setup"] = "advance",
+    ball_launch_speed_mm_s: float | None = None,
 ) -> FlickPlan | None:
-    """Calculate a safe angled contact and enough impulse for its ball path."""
+    """Calculate a safe angled contact and enough impulse for its ball path.
+
+    Args:
+        piece_position: Normalized position of the flicking piece.
+        ball_position: Normalized ball position.
+        ball_target: Normalized point the ball should travel toward.
+        obstacles: Areas the piece and ball paths must avoid.
+        action: The action recorded on the plan.
+        ball_launch_speed_mm_s: Ball speed wanted just after contact. When
+            omitted, the speed that stops the ball at ``ball_target`` is
+            used. A bank pass gives a higher speed, because the ball must
+            carry on past the wall.
+
+    Returns:
+        FlickPlan | None: The contact plan, or ``None`` if the approach is too
+            oblique, a path is blocked, or more than full strength is needed.
+    """
     ball_direction = Vector2(
         (ball_target.x - ball_position.x) * PITCH_LENGTH_MM,
         (ball_target.y - ball_position.y) * PITCH_WIDTH_MM,
@@ -384,8 +421,10 @@ def _ball_contact_plan(
     ):
         return None
 
-    desired_ball_speed_mm_s = sqrt(
-        2.0 * BALL_FRICTION_MM_S2 * ball_travel_mm
+    desired_ball_speed_mm_s = (
+        ball_launch_speed_mm_s
+        if ball_launch_speed_mm_s is not None
+        else sqrt(2.0 * BALL_FRICTION_MM_S2 * ball_travel_mm)
     )
     desired_piece_impact_speed_mm_s = (
         desired_ball_speed_mm_s / 1.3 / alignment
@@ -459,6 +498,237 @@ def _ball_pass_plan(
     return best_plan
 
 
+def _bank_walls() -> list[tuple[str, float]]:
+    """Return the walls a bank pass may use, attacking toward increasing X.
+
+    Each wall is given as the axis that is constant along it and the
+    millimeter coordinate of the ball's center when it touches the wall. The
+    walls are both touchlines and the attacked goal line. The team's own goal
+    line is never used, so a bank pass cannot turn into an own goal.
+
+    Returns:
+        list[tuple[str, float]]: ``("x" or "y", line_mm)`` pairs.
+    """
+    return [
+        ("y", BALL_RADIUS_MM),
+        ("y", PITCH_WIDTH_MM - BALL_RADIUS_MM),
+        ("x", PITCH_LENGTH_MM - BALL_RADIUS_MM),
+    ]
+
+
+def bank_bounce_point(
+    ball_position: Vector2,
+    target: Vector2,
+    axis: str,
+    line_mm: float,
+) -> Vector2 | None:
+    """Return where a one-wall bank pass must touch the wall.
+
+    The physics keeps the ball's speed along a wall and scales its speed
+    across the wall by ``WALL_RESTITUTION``. A straight line from the ball to
+    the target's image, placed beyond the wall at the target's distance from
+    the wall divided by the restitution, therefore crosses the wall where the
+    ball must bounce. Friction does not change the direction, so the image is
+    exact apart from speed.
+
+    Args:
+        ball_position: Normalized ball position.
+        target: Normalized point the ball should reach after the bounce.
+        axis: ``"y"`` for a touchline or ``"x"`` for a goal line.
+        line_mm: Coordinate, along ``axis``, of the ball's center at the
+            bounce.
+
+    Returns:
+        Vector2 | None: The normalized bounce point, or ``None`` if the ball
+            and target are not on the same side of the wall, the bounce
+            would fall within ``BANK_WALL_MARGIN_MM`` of a corner, or, on a
+            goal line, within the goal-area span (where a touch would hand
+            possession to the defender) plus that margin.
+    """
+    index = 0 if axis == "x" else 1
+    ball_mm = (ball_position.x * PITCH_LENGTH_MM, ball_position.y * PITCH_WIDTH_MM)
+    target_mm = (target.x * PITCH_LENGTH_MM, target.y * PITCH_WIDTH_MM)
+    ball_side = ball_mm[index] - line_mm
+    target_side = target_mm[index] - line_mm
+    if ball_side * target_side <= 0.0:
+        return None
+    image = list(target_mm)
+    image[index] = line_mm - target_side / WALL_RESTITUTION
+    fraction = (line_mm - ball_mm[index]) / (image[index] - ball_mm[index])
+    if not 0.0 < fraction < 1.0:
+        return None
+    other = 1 - index
+    along_mm = ball_mm[other] + fraction * (image[other] - ball_mm[other])
+    extent_mm = PITCH_LENGTH_MM if other == 0 else PITCH_WIDTH_MM
+    corner_margin = BALL_RADIUS_MM + BANK_WALL_MARGIN_MM
+    if not corner_margin <= along_mm <= extent_mm - corner_margin:
+        return None
+    if axis == "x" and (
+        abs(along_mm - PITCH_WIDTH_MM / 2.0)
+        <= GOAL_AREA_WIDTH_MM / 2.0 + BANK_WALL_MARGIN_MM
+    ):
+        return None
+    if axis == "x":
+        return Vector2(line_mm / PITCH_LENGTH_MM, along_mm / PITCH_WIDTH_MM)
+    return Vector2(along_mm / PITCH_LENGTH_MM, line_mm / PITCH_WIDTH_MM)
+
+
+def _bank_pass_plans(
+    piece_position: Vector2,
+    ball_position: Vector2,
+    receiver_id: str,
+    receiver_position: Vector2,
+    obstacles: list[Obstacle],
+) -> list[FlickPlan]:
+    """Plan bank passes from one piece to one receiver, off each usable wall.
+
+    The ball's launch speed covers both legs: enough speed after the bounce to
+    reach the receiver, divided by the share of speed the bounce keeps for
+    this angle, plus what friction takes on the way to the wall. Each pass is
+    offered at ``BANK_STRENGTH_FACTORS`` times that strength, because errors
+    grow over the longer path; simulation picks the one that works.
+
+    Args:
+        piece_position: Normalized position of the passing piece.
+        ball_position: Normalized ball position.
+        receiver_id: Identifier of the receiving teammate.
+        receiver_position: Normalized position of the receiver.
+        obstacles: Areas the piece and ball paths must avoid.
+
+    Returns:
+        list[FlickPlan]: Bank passes within full strength, possibly empty.
+    """
+    plans: list[FlickPlan] = []
+    clearance = max(
+        PIECE_RADIUS_MM / PITCH_LENGTH_MM,
+        BALL_RADIUS_MM / PITCH_WIDTH_MM,
+    )
+    for axis, line_mm in _bank_walls():
+        bounce = bank_bounce_point(
+            ball_position,
+            receiver_position,
+            axis,
+            line_mm,
+        )
+        if bounce is None:
+            continue
+        if not _segment_is_clear(bounce, receiver_position, obstacles, clearance):
+            continue
+        first_leg_mm = distance_between_mm(ball_position, bounce)
+        second_leg_mm = distance_between_mm(bounce, receiver_position)
+        if first_leg_mm == 0.0:
+            continue
+        incoming = Vector2(
+            (bounce.x - ball_position.x) * PITCH_LENGTH_MM,
+            (bounce.y - ball_position.y) * PITCH_WIDTH_MM,
+        ).normalized()
+        across, along = (
+            (incoming.x, incoming.y) if axis == "x" else (incoming.y, incoming.x)
+        )
+        kept = sqrt(along * along + (WALL_RESTITUTION * across) ** 2)
+        after_bounce = sqrt(2.0 * BALL_FRICTION_MM_S2 * second_leg_mm)
+        launch_speed = sqrt(
+            (after_bounce / kept) ** 2
+            + 2.0 * BALL_FRICTION_MM_S2 * first_leg_mm
+        )
+        contact = _ball_contact_plan(
+            piece_position,
+            ball_position,
+            bounce,
+            obstacles,
+            action="pass",
+            ball_launch_speed_mm_s=launch_speed,
+        )
+        if contact is None:
+            continue
+        for factor in BANK_STRENGTH_FACTORS:
+            strength = contact.strength * factor
+            if strength > 1.0:
+                continue
+            plans.append(
+                FlickPlan(
+                    piece_target=contact.piece_target,
+                    ball_target=receiver_position,
+                    strength=strength,
+                    action="pass",
+                    receiver_piece_id=receiver_id,
+                    bank=True,
+                )
+            )
+    return plans
+
+
+def bank_pass_candidates(
+    player_pieces: list[tuple[str, Vector2, int]],
+    ball_position: Vector2,
+    obstacles: list[Obstacle] | None = None,
+    *,
+    attack_direction: int = ATTACK_TOWARD_INCREASING_X,
+) -> list[FlickPlan]:
+    """List bank passes for a team: passes that rebound off one wall.
+
+    Every piece with touches left may pass to every teammate, off either
+    touchline or the attacked goal line outside the goal-area span. A pass
+    whose approach would run through a teammate is left out. There are no
+    bank shots (rules, Q31); callers use these only when no direct pass
+    works (Q7).
+
+    Args:
+        player_pieces: Identifier, normalized position and consecutive touch
+            count for each piece of the attacking team.
+        ball_position: Normalized ball position.
+        obstacles: Areas that piece and ball paths must avoid.
+        attack_direction: ``1`` to attack toward increasing X or ``-1`` to
+            attack toward decreasing X.
+
+    Returns:
+        list[FlickPlan]: Bank passes with their flicking piece set, weakest
+            first.
+
+    Raises:
+        ValueError: If the attack direction is not ``1`` or ``-1``.
+    """
+    direction = _validated_direction(attack_direction)
+    mirror = direction == ATTACK_TOWARD_DECREASING_X
+    pieces = [
+        (piece_id, _mirror_position(position, mirror), touches_used)
+        for piece_id, position, touches_used in player_pieces
+    ]
+    ball = _mirror_position(ball_position, mirror)
+    mirrored_obstacles = _mirror_obstacles(obstacles or [], mirror)
+    plans: list[FlickPlan] = []
+    for piece_id, piece_position, touches_used in pieces:
+        if touches_used >= 3:
+            continue
+        for receiver_id, receiver_position, _ in pieces:
+            if receiver_id == piece_id:
+                continue
+            for plan in _bank_pass_plans(
+                piece_position,
+                ball,
+                receiver_id,
+                receiver_position,
+                mirrored_obstacles,
+            ):
+                if any(
+                    _approach_intersects_teammate(
+                        piece_position,
+                        plan.piece_target,
+                        other_position,
+                    )
+                    for other_id, other_position, _ in pieces
+                    if other_id != piece_id
+                ):
+                    continue
+                plans.append(replace(plan, flicking_piece_id=piece_id))
+    plans.sort(key=lambda plan: plan.strength)
+    return [
+        mirrored
+        for plan in plans
+        if (mirrored := _mirror_plan(plan, mirror)) is not None
+    ]
+
+
 def _shot_plans(
     piece_position: Vector2,
     ball_position: Vector2,
@@ -500,10 +770,69 @@ def _shot_plans(
     return shots
 
 
+def block_flick_cap(distance_mm: float) -> float:
+    """Return the largest block-flick strength for a piece at a distance.
+
+    The cap grows with the piece's distance from the ball (rules, Q22): a
+    piece near the ball may only make a small adjustment, while a distant
+    piece may flick harder to get back into play. Between the near and far
+    distances the cap rises in a straight line.
+
+    Args:
+        distance_mm: Distance from the piece to the ball, in millimeters.
+
+    Returns:
+        float: Strength cap from ``BLOCK_CAP_NEAR`` to ``BLOCK_CAP_FAR``.
+    """
+    if distance_mm <= BLOCK_CAP_NEAR_MM:
+        return BLOCK_CAP_NEAR
+    if distance_mm >= BLOCK_CAP_FAR_MM:
+        return BLOCK_CAP_FAR
+    fraction = (distance_mm - BLOCK_CAP_NEAR_MM) / (
+        BLOCK_CAP_FAR_MM - BLOCK_CAP_NEAR_MM
+    )
+    return BLOCK_CAP_NEAR + (BLOCK_CAP_FAR - BLOCK_CAP_NEAR) * fraction
+
+
+def progress_steps(progress_mm: float) -> int:
+    """Return forward progress in whole steps, capped at the balanced limit.
+
+    Used to rank flicks under the balanced, possession-first rule. Progress
+    is counted in ``PROGRESS_STEP_MM`` steps so that a millimeter or two of
+    extra travel does not outrank a lower flick strength, and it is capped
+    at ``MAX_ADVANCE_MM`` so that going further than the balanced limit earns
+    nothing more.
+
+    Args:
+        progress_mm: Ball movement toward the attacked goal, in millimeters.
+
+    Returns:
+        int: Whole progress steps; negative for a backward move.
+    """
+    return int(min(progress_mm, MAX_ADVANCE_MM) // PROGRESS_STEP_MM)
+
+
 def _ball_advance_waypoints(
     ball_position: Vector2,
     obstacles: list[Obstacle],
+    distances_mm: tuple[float, ...] = ADVANCE_DISTANCES_MM,
 ) -> list[Vector2]:
+    """Return ball targets that advance toward areas near the goal.
+
+    For each progress area, a target is placed at each advance distance
+    along the straight line toward it, or along an obstacle-avoiding route
+    when the straight line is blocked. Distances above ``MAX_ADVANCE_MM``
+    (the balanced limit) are skipped, and a target is never placed beyond
+    its area's center.
+
+    Args:
+        ball_position: Normalized ball position, attacking toward increasing X.
+        obstacles: Areas the ball path must avoid.
+        distances_mm: Ball travel distances to offer, in millimeters.
+
+    Returns:
+        list[Vector2]: Distinct advance targets.
+    """
     progress_areas = (
         TargetArea(Vector2(0.92, 0.5), 0.015),
         TargetArea(Vector2(0.97, 0.44), 0.012),
@@ -516,38 +845,126 @@ def _ball_advance_waypoints(
         PIECE_RADIUS_MM / PITCH_LENGTH_MM,
         BALL_RADIUS_MM / PITCH_WIDTH_MM,
     )
+    distances = [
+        distance for distance in distances_mm if distance <= MAX_ADVANCE_MM
+    ]
     for progress_area in progress_areas:
         if progress_area.contains(ball_position):
             continue
-        target = progress_area.center
-        travel_mm = distance_between_mm(ball_position, target)
-        fraction = min(1.0, BALL_ADVANCE_MM / travel_mm)
-        waypoint = Vector2(
-            ball_position.x + (target.x - ball_position.x) * fraction,
-            ball_position.y + (target.y - ball_position.y) * fraction,
+        detour: Vector2 | None = None
+        detour_checked = False
+        for advance_mm in distances:
+            target = progress_area.center
+            travel_mm = distance_between_mm(ball_position, target)
+            fraction = min(1.0, advance_mm / travel_mm)
+            waypoint = Vector2(
+                ball_position.x + (target.x - ball_position.x) * fraction,
+                ball_position.y + (target.y - ball_position.y) * fraction,
+            )
+            if not _segment_is_clear(
+                ball_position,
+                waypoint,
+                obstacles,
+                clearance,
+            ):
+                if not detour_checked:
+                    detour = choose_waypoint(
+                        ball_position,
+                        progress_area,
+                        obstacles,
+                    )
+                    detour_checked = True
+                if detour is None:
+                    continue
+                waypoint = detour
+                travel_mm = distance_between_mm(ball_position, waypoint)
+                if travel_mm > advance_mm:
+                    fraction = advance_mm / travel_mm
+                    waypoint = Vector2(
+                        ball_position.x
+                        + (waypoint.x - ball_position.x) * fraction,
+                        ball_position.y
+                        + (waypoint.y - ball_position.y) * fraction,
+                    )
+            if any(
+                distance_between_mm(waypoint, existing) < 1.0
+                for existing in waypoints
+            ):
+                continue
+            waypoints.append(waypoint)
+    return waypoints
+
+
+def _piece_advance_plans(
+    piece_position: Vector2,
+    ball_position: Vector2,
+    obstacles: list[Obstacle],
+    advance_waypoints: list[Vector2] | None,
+) -> list[FlickPlan]:
+    """Return every reachable advance for one piece.
+
+    An advance must not move the ball backward along the pitch.
+
+    Args:
+        piece_position: Normalized position of the piece.
+        ball_position: Normalized ball position, attacking toward increasing X.
+        obstacles: Areas the piece and ball paths must avoid.
+        advance_waypoints: Ball targets to try. ``None`` means the standard
+            targets toward the goal from ``_ball_advance_waypoints``.
+
+    Returns:
+        list[FlickPlan]: The advances the piece can make within full strength.
+    """
+    if advance_waypoints is None:
+        advance_waypoints = _ball_advance_waypoints(
+            ball_position,
+            obstacles,
         )
-        if not _segment_is_clear(
+    advance_plans: list[FlickPlan] = []
+    for waypoint in advance_waypoints:
+        plan = _ball_contact_plan(
+            piece_position,
             ball_position,
             waypoint,
             obstacles,
-            clearance,
-        ):
-            waypoint = choose_waypoint(
-                ball_position,
-                progress_area,
-                obstacles,
-            )
-            if waypoint is None:
-                continue
-            travel_mm = distance_between_mm(ball_position, waypoint)
-            if travel_mm > BALL_ADVANCE_MM:
-                fraction = BALL_ADVANCE_MM / travel_mm
-                waypoint = Vector2(
-                    ball_position.x + (waypoint.x - ball_position.x) * fraction,
-                    ball_position.y + (waypoint.y - ball_position.y) * fraction,
-                )
-        waypoints.append(waypoint)
-    return waypoints
+        )
+        if plan is not None and plan.ball_target.x >= ball_position.x:
+            advance_plans.append(plan)
+    return advance_plans
+
+
+def _advances_by_distance(
+    plans: list[FlickPlan],
+    ball_position: Vector2,
+) -> list[FlickPlan]:
+    """Keep the weakest advance at each offered advance distance.
+
+    Each plan is grouped with the smallest ``ADVANCE_DISTANCES_MM`` value
+    that covers its ball travel, and the lowest-strength plan of each group
+    is kept. This lets a piece offer a short, a medium and a long advance
+    without simulating every target area at every distance.
+
+    Args:
+        plans: One piece's advance plans.
+        ball_position: Normalized ball position.
+
+    Returns:
+        list[FlickPlan]: At most one plan per advance distance, longest first.
+    """
+    best: dict[float, FlickPlan] = {}
+    for plan in plans:
+        travel_mm = distance_between_mm(ball_position, plan.ball_target)
+        group = next(
+            (
+                distance
+                for distance in ADVANCE_DISTANCES_MM
+                if travel_mm <= distance + 1.0
+            ),
+            ADVANCE_DISTANCES_MM[-1],
+        )
+        if group not in best or plan.strength < best[group].strength:
+            best[group] = plan
+    return [best[group] for group in sorted(best, reverse=True)]
 
 
 def _plan_piece_flick(
@@ -597,21 +1014,12 @@ def _plan_piece_flick(
             obstacles,
         )
 
-    if advance_waypoints is None:
-        advance_waypoints = _ball_advance_waypoints(
-            ball_position,
-            obstacles,
-        )
-    advance_plans: list[FlickPlan] = []
-    for waypoint in advance_waypoints:
-        plan = _ball_contact_plan(
-            piece_position,
-            ball_position,
-            waypoint,
-            obstacles,
-        )
-        if plan is not None and plan.ball_target.x >= ball_position.x:
-            advance_plans.append(plan)
+    advance_plans = _piece_advance_plans(
+        piece_position,
+        ball_position,
+        obstacles,
+        advance_waypoints,
+    )
     if advance_plans:
         return min(
             advance_plans,
@@ -885,6 +1293,16 @@ def _team_flick_candidates(
         piece_plans = [plan]
         if plan.action == "shot":
             piece_plans = _shot_plans(piece_position, ball_position, obstacles)
+        elif plan.action == "advance":
+            piece_plans = _advances_by_distance(
+                _piece_advance_plans(
+                    piece_position,
+                    ball_position,
+                    obstacles,
+                    advance_waypoints,
+                ),
+                ball_position,
+            )
         for piece_plan in piece_plans:
             if any(
                 _approach_intersects_teammate(
@@ -944,9 +1362,11 @@ def _team_flick_candidates(
             if plan.action in {"advance", "pass"}
         ),
         key=lambda plan: (
+            -progress_steps(
+                (plan.ball_target.x - ball_position.x) * PITCH_LENGTH_MM
+            ),
             plan.strength,
             distance_between_mm(ball_position, plan.ball_target),
-            -plan.ball_target.x,
         ),
     )
     return [*shot_plans, *setup_plans, *possession_plans]

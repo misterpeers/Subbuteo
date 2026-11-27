@@ -4,13 +4,19 @@ import unittest
 from math import sqrt
 
 from sim_ai_brain import (
+    MAX_ADVANCE_MM,
     Obstacle,
     TargetArea,
+    _bank_walls,
+    bank_bounce_point,
+    bank_pass_candidates,
+    block_flick_cap,
     choose_waypoint,
     estimate_contact_strength,
     plan_piece_flick,
     plan_team_flick,
     plan_team_flick_candidates,
+    progress_steps,
     sample_flick_candidates,
     waypoint_flick_strength,
 )
@@ -18,6 +24,7 @@ from sim_ai_flick import distance_between_mm, flick_toward_target
 from sim_physics import (
     BALL_FRICTION_MM_S2,
     BALL_RADIUS_MM,
+    GOAL_AREA_WIDTH_MM,
     HOME,
     MAX_FLICK_SPEED_MM_S,
     MAX_DRAG_MM,
@@ -26,6 +33,7 @@ from sim_physics import (
     PIECE_RADIUS_MM,
     PITCH_LENGTH_MM,
     PITCH_WIDTH_MM,
+    WALL_RESTITUTION,
     Body,
     PhysicsWorld,
     Vector2,
@@ -754,6 +762,193 @@ class BrainPlanningTests(unittest.TestCase):
             ),
             [],
         )
+
+
+class AdvanceDistanceTests(unittest.TestCase):
+    """Check longer advances under the balanced, possession-first rule."""
+
+    def test_team_candidates_offer_short_and_long_advances(self) -> None:
+        """A piece behind the ball offers several advance distances."""
+        ball = Vector2(0.4, 0.5)
+        pieces = [("p1", Vector2(0.37, 0.5), 0)]
+
+        candidates = plan_team_flick_candidates(pieces, ball)
+        travels = [
+            distance_between_mm(ball, plan.ball_target)
+            for plan in candidates
+            if plan.action == "advance"
+        ]
+
+        self.assertGreaterEqual(len(travels), 3)
+        self.assertLess(min(travels), 31.0)
+        self.assertGreater(max(travels), 90.0)
+
+    def test_longest_advance_is_offered_first(self) -> None:
+        """Among advances, more progress is listed before less."""
+        ball = Vector2(0.4, 0.5)
+        pieces = [("p1", Vector2(0.37, 0.5), 0)]
+
+        advances = [
+            plan
+            for plan in plan_team_flick_candidates(pieces, ball)
+            if plan.action == "advance"
+        ]
+        progress = [plan.ball_target.x - ball.x for plan in advances]
+
+        self.assertEqual(progress, sorted(progress, reverse=True))
+
+    def test_no_advance_goes_past_the_balanced_limit(self) -> None:
+        """No planned advance moves the ball further than 100 mm."""
+        for ball_x in (0.2, 0.4, 0.6, 0.75):
+            ball = Vector2(ball_x, 0.45)
+            pieces = [
+                ("p1", Vector2(ball_x - 0.03, 0.45), 0),
+                ("p2", Vector2(ball_x - 0.08, 0.6), 0),
+            ]
+            for plan in plan_team_flick_candidates(pieces, ball):
+                if plan.action != "advance":
+                    continue
+                with self.subTest(ball_x=ball_x):
+                    self.assertLessEqual(
+                        distance_between_mm(ball, plan.ball_target),
+                        MAX_ADVANCE_MM + 0.001,
+                    )
+                    self.assertGreaterEqual(plan.ball_target.x, ball.x)
+
+    def test_single_piece_plan_still_prefers_the_weakest_advance(self) -> None:
+        """plan_piece_flick keeps choosing the lowest-strength advance."""
+        ball = Vector2(0.4, 0.5)
+
+        plan = plan_piece_flick(Vector2(0.37, 0.5), ball)
+
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.action, "advance")
+        self.assertLess(distance_between_mm(ball, plan.ball_target), 31.0)
+
+    def test_block_flick_cap_grows_with_distance(self) -> None:
+        """The cap is 20% near the ball, 60% far away, linear between."""
+        self.assertAlmostEqual(block_flick_cap(50.0), 0.2)
+        self.assertAlmostEqual(block_flick_cap(100.0), 0.2)
+        self.assertAlmostEqual(block_flick_cap(250.0), 0.4)
+        self.assertAlmostEqual(block_flick_cap(400.0), 0.6)
+        self.assertAlmostEqual(block_flick_cap(900.0), 0.6)
+
+    def test_progress_steps_are_whole_and_capped(self) -> None:
+        """Progress counts in 10 mm steps and stops counting at 100 mm."""
+        self.assertEqual(progress_steps(35.0), 3)
+        self.assertEqual(progress_steps(100.0), 10)
+        self.assertEqual(progress_steps(150.0), 10)
+        self.assertEqual(progress_steps(-60.0), -6)
+
+
+class BankPassTests(unittest.TestCase):
+    """Check bank-pass geometry and that there are no bank shots."""
+
+    def test_touchline_bounce_follows_the_restitution(self) -> None:
+        """After the bounce the path is flatter by the wall restitution."""
+        ball = Vector2(0.33, 0.25)
+        target = Vector2(0.6, 0.25)
+        line_mm = BALL_RADIUS_MM
+
+        bounce = bank_bounce_point(ball, target, "y", line_mm)
+
+        self.assertIsNotNone(bounce)
+        assert bounce is not None
+        self.assertAlmostEqual(bounce.y * PITCH_WIDTH_MM, line_mm)
+        in_slope = (ball.y * PITCH_WIDTH_MM - line_mm) / (
+            (bounce.x - ball.x) * PITCH_LENGTH_MM
+        )
+        out_slope = (target.y * PITCH_WIDTH_MM - line_mm) / (
+            (target.x - bounce.x) * PITCH_LENGTH_MM
+        )
+        self.assertAlmostEqual(out_slope, WALL_RESTITUTION * in_slope)
+
+    def test_ball_and_target_on_different_sides_give_no_bounce(self) -> None:
+        """A wall between ball and target cannot be used."""
+        self.assertIsNone(
+            bank_bounce_point(
+                Vector2(0.3, 0.4),
+                Vector2(0.6, 0.6),
+                "y",
+                0.5 * PITCH_WIDTH_MM,
+            )
+        )
+
+    def test_goal_line_bounce_avoids_the_goal_area_span(self) -> None:
+        """A goal-line bounce inside the goal-area span is refused."""
+        line_mm = PITCH_LENGTH_MM - BALL_RADIUS_MM
+        central = bank_bounce_point(
+            Vector2(0.8, 0.5),
+            Vector2(0.85, 0.5),
+            "x",
+            line_mm,
+        )
+        wide = bank_bounce_point(
+            Vector2(0.8, 0.1),
+            Vector2(0.85, 0.15),
+            "x",
+            line_mm,
+        )
+
+        self.assertIsNone(central)
+        self.assertIsNotNone(wide)
+        assert wide is not None
+        self.assertGreater(
+            abs(wide.y - 0.5) * PITCH_WIDTH_MM,
+            GOAL_AREA_WIDTH_MM / 2.0,
+        )
+
+    def test_own_goal_line_is_never_a_bank_wall(self) -> None:
+        """Only the touchlines and the attacked goal line are used."""
+        for axis, line_mm in _bank_walls():
+            if axis == "x":
+                self.assertGreater(line_mm, PITCH_LENGTH_MM / 2.0)
+
+    def test_bank_candidates_are_passes_for_both_teams(self) -> None:
+        """Bank candidates are passes, mirrored for the away team."""
+        home = bank_pass_candidates(
+            [("p1", Vector2(0.30, 0.30), 2), ("p2", Vector2(0.6, 0.25), 0)],
+            Vector2(0.33, 0.25),
+        )
+        away = bank_pass_candidates(
+            [("p1", Vector2(0.70, 0.30), 2), ("p2", Vector2(0.4, 0.25), 0)],
+            Vector2(0.67, 0.25),
+            attack_direction=-1,
+        )
+
+        self.assertGreater(len(home), 0)
+        self.assertEqual(len(home), len(away))
+        for home_plan, away_plan in zip(home, away):
+            self.assertEqual(home_plan.action, "pass")
+            self.assertTrue(home_plan.bank)
+            self.assertEqual(home_plan.receiver_piece_id, "p2")
+            self.assertAlmostEqual(home_plan.strength, away_plan.strength)
+            self.assertAlmostEqual(
+                away_plan.piece_target.x,
+                1.0 - home_plan.piece_target.x,
+            )
+
+    def test_piece_out_of_touches_offers_no_bank_pass(self) -> None:
+        """A piece that has used three touches cannot pass."""
+        self.assertEqual(
+            bank_pass_candidates(
+                [("p1", Vector2(0.30, 0.30), 3), ("p2", Vector2(0.6, 0.25), 0)],
+                Vector2(0.33, 0.25),
+            ),
+            [],
+        )
+
+    def test_no_planned_shot_is_banked(self) -> None:
+        """Shots are always direct; there are no bank shots."""
+        for ball_y in (0.1, 0.3, 0.5, 0.7, 0.9):
+            candidates = plan_team_flick_candidates(
+                [("p1", Vector2(0.84, ball_y), 0), ("p2", Vector2(0.7, 0.5), 0)],
+                Vector2(0.87, ball_y),
+            )
+            for plan in candidates:
+                with self.subTest(ball_y=ball_y):
+                    self.assertFalse(plan.bank)
 
 
 def _segment_crosses_obstacle(

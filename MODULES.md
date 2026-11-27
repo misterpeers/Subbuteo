@@ -83,18 +83,44 @@ Imports: `sim_physics`.
 The attacking AI planner. It decides what to do, but never applies a flick.
 
 - Data types: `Obstacle`, `TargetArea`, `Scenario`, `FlickPlan` (piece target,
-  ball target, strength, action `advance` / `pass` / `shot` / `setup`, receiver
-  and flicking piece).
+  ball target, strength, action `advance` / `pass` / `shot` / `setup`, receiver,
+  flicking piece, and `bank` for a pass meant to rebound off a wall).
 - Navigation: `choose_waypoint()` finds an obstacle-avoiding path and a safe
   stopping point; `waypoint_flick_strength()` converts distance to strength.
 - Ball planning: `plan_piece_flick()` plans one piece; `plan_team_flick()`
   picks the best piece and action for a team. Priority is shot, then setup
-  pass, then advance or pass, preferring lower strength and shorter travel.
-  `plan_team_flick_candidates()` returns the whole ranked list, best first
-  (`plan_team_flick()` returns its first entry). One internal function,
+  pass, then advance or pass. `plan_team_flick_candidates()` returns the
+  whole ranked list, best first (`plan_team_flick()` returns its first
+  entry); advances and passes are listed by forward progress, then lower
+  strength, then shorter travel. One internal function,
   `_plan_piece_flick()`, decides shoot, advance or pass, both for the
   flicking piece and when the setup-pass search judges a receiver's next
   move (with short angled advances from `_angled_advance_waypoints()`).
+- Advances (balanced rule): each piece offers advances of
+  `ADVANCE_DISTANCES_MM` (30, 60 and 100 mm) toward areas near the goal,
+  never beyond `MAX_ADVANCE_MM` (100 mm, the balanced limit) and never moving
+  the ball backward. `_piece_advance_plans()` lists them and
+  `_advances_by_distance()` keeps the weakest one at each distance.
+  `progress_steps()` counts progress in `PROGRESS_STEP_MM` (10 mm) steps,
+  capped at the limit, for ranking. A single-piece plan
+  (`plan_piece_flick()`) still returns the weakest advance.
+- `block_flick_cap()`: the block-flick strength cap for a piece's distance
+  from the ball, 20% within 100 mm rising linearly to 60% at 400 mm or more.
+  The verifier's exposure check uses it now; the defenders will use it.
+- Bank passes: `bank_pass_candidates()` lists passes that rebound off one
+  wall, from every piece with touches left to every teammate, weakest
+  first, mirrored for the team's attack direction. The walls
+  (`_bank_walls()`) are both touchlines and the attacked goal line, never
+  the team's own goal line. `bank_bounce_point()` finds where the ball must
+  touch the wall by aiming at the receiver's image beyond it, at the
+  receiver's distance from the wall divided by `WALL_RESTITUTION` (the
+  physics keeps speed along a wall and scales speed across it). It refuses
+  a bounce within `BANK_WALL_MARGIN_MM` (20 mm) of a corner, or on the goal
+  line within the goal-area span plus that margin, where a touch would hand
+  possession over. The launch speed covers both legs and the speed lost at
+  the bounce (`_ball_contact_plan()` accepts `ball_launch_speed_mm_s`), and
+  each pass is offered at `BANK_STRENGTH_FACTORS` (0.9, 1.0 and 1.15 times
+  that strength). There are no bank shots: shots are always aimed directly.
 - Shot aim: `_shot_plans()` aims at `SHOT_AIM_OFFSETS_MM` (0, ±20 and ±38 mm
   across the goal mouth, 24 mm behind the goal line). A single-piece plan
   tries the center first; the team candidate list offers every aim point,
@@ -118,7 +144,8 @@ What-if simulation of flicks. It never changes the world it is given.
   piece before the ball (a foul), whether the ball touched an opposing piece,
   whether possession was kept, goal, receiving teammate, where the ball
   stopped, progress toward the goal, the gap to the nearest teammate who can
-  flick next, and whether a next contact is available (see below).
+  flick next, whether a next contact is available (see below), and whether
+  the position is exposed to a block-flick.
   `FlickOutcome.keeps_possession` is the combined legality check.
 - Progress (`ball_progress_mm`): movement along the pitch length toward the
   attacked goal. When the ball starts inside the shooting area it is instead
@@ -130,6 +157,13 @@ What-if simulation of flicks. It never changes the world it is given.
   other piece blocks. With `behind_ball_for` set, only pieces behind the ball
   count, so their flick can push it forward. The outcome records both
   (`next_contact_available`, `forward_contact_available`).
+- Exposure: `is_exposed()` takes the nearest piece that may flick next and
+  stands behind the ball (or the nearest such piece if none is behind it),
+  and reports whether any opposing field piece could slide onto the line
+  from that piece to the ball with one flick at its `block_flick_cap()`.
+  It is a quick estimate and does not check that the block would be legal.
+  With no opposing pieces it is always false. The outcome records it as
+  `FlickOutcome.exposed`.
 - Lone final touch: only one piece can be partway through its consecutive
   touches. When a flick leaves that piece on its final touch, without a pass,
   and no other piece of the team is within flick range of the ball (blocked or
@@ -142,8 +176,17 @@ What-if simulation of flicks. It never changes the world it is given.
   then a **step back** (ball moved more than 50 mm back), then a **repeat**
   (ball stops within 8 mm of a position where it already stopped in this
   attack, from `visited_ball_positions`), then a **dead end**. Within a group
-  it prefers a flick that leaves a piece behind the ball, then a ball that
-  stops within 100 mm of a teammate, then lower strength, then shorter travel.
+  the balanced, possession-first rule applies: a flick that leaves a piece
+  behind the ball, then a ball that stops within 100 mm of a teammate, then
+  a position that is not exposed, then more progress (in 10 mm steps, up to
+  100 mm), then lower strength, then shorter travel.
+- Bank stage: when no planned flick reaches the advance level (no direct
+  shot, setup, advance or pass survived; only step backs, repeats or dead
+  ends, or nothing), up to `MAX_BANK_CANDIDATES` (20) bank passes from
+  `bank_pass_candidates()` are simulated and ranked with the planned
+  flicks. `BANK_ONLY_WHEN_NO_DIRECT` (default `True`, also the
+  `bank_only_when_no_direct` argument) is the trigger; with `False`, bank
+  passes are tried every time.
 - Shot check: a flick with `needs_shot_check` keeps its rank only if
   `_ShotChecker` finds a verified goal when it simulates the flick and plans
   the next one on the result; otherwise it counts as a dead end. At most
@@ -158,8 +201,8 @@ What-if simulation of flicks. It never changes the world it is given.
   again at `LONG_SAMPLE_STRENGTHS` (0.5, 0.7, 0.9), which can carry the ball
   into the shooting area. The result is a `VerifiedFlick` whose `source` is
   `planned` or `sampled`.
-- Limits: 12 planner candidates and 40 sampled candidates per decision (plus
-  up to 40 for the long-reach pass), each simulated for at most 600 steps of
+- Limits: 12 planner candidates, up to 20 bank passes and 40 sampled
+  candidates per decision (plus up to 40 for the long-reach pass), each simulated for at most 600 steps of
   1/60 s.
 
 Imports: `sim_ai_brain`, `sim_ai_flick`, `sim_physics`.
@@ -192,14 +235,23 @@ The scenario harness for measuring the AI without a window.
 
 - `ScenarioSetup`, `build_world()`, `run_scenario()`: build and play one
   attack to its outcome.
-- `random_setup()`: seeded random start, mirrored for the away team.
+- `random_setup()`: seeded random start, mirrored for the away team. With
+  `blocker_count`, it also places static opposing pieces
+  (`ScenarioSetup.blocker_positions`) ahead of the ball, up to
+  `BLOCKER_MAX_X` (0.92), at least `BLOCKER_MIN_BALL_GAP_MM` (60 mm) from it
+  and clear of every other body. They come from a separate seeded
+  generator, so the pieces and ball for a seed do not change with the
+  blocker count. `build_world()` adds them as opposing pieces; the ball
+  touching one loses possession as usual. Blockers are for testing only; a
+  full match does not use them.
 - `run_batch()` and `format_summary()`: aggregate many seeds into goal rate,
   mean flicks per goal, outcome counts, failing seeds, and decision statistics
   (how many decisions used a planner candidate, a sampled fallback, or found no
   move, and the mean, median, 95th percentile and maximum decision time).
 - Command line: `python sim_scenarios.py --count 100 --seed 0 --team home`.
   Add `--pieces 4` for four attacking pieces (the 5-a-side reference; the
-  default is 3), `--max-flicks` to change the 30-flick test stop, and
+  default is 3), `--blockers N` for N static opposing pieces,
+  `--max-flicks` to change the 30-flick test stop, and
   `--no-verify` to use the planner's first choice without simulating it, for
   comparison.
 
@@ -232,10 +284,10 @@ Run all tests with `python -m unittest discover -p "test_*.py"`.
 |---|---|
 | `test_sim_physics.py` | Boundaries, goals, possession transfers, net damping, collisions, flick strength, piece-contact record and world cloning. |
 | `test_sim_ai_flick.py` | Aiming and strength limits, plus the training UI's coordinate panel and rulers. |
-| `test_sim_ai_brain.py` | Waypoints, contact planning, passes, setup passes, touch limits, attack direction, candidate ordering, shot aim points across the goal mouth and sampled flicks. |
-| `test_sim_ai_verify.py` | Simulated outcomes, foul-before-ball detection, verified selection, the sampled fallback, the next-contact check, step-back, repeat and dead-end ranking, the shot check, the lone forward reaching the shooting area, an angled shot beating a piece on the centre line, and progress measurement inside and outside the shooting area. |
+| `test_sim_ai_brain.py` | Waypoints, contact planning, passes, setup passes, touch limits, attack direction, candidate ordering, shot aim points across the goal mouth, advance distances and the 100 mm limit, the block-flick cap, progress steps, bank-pass geometry (restitution, goal-area span, no own goal line, mirroring), no banked shots and sampled flicks. |
+| `test_sim_ai_verify.py` | Simulated outcomes, foul-before-ball detection, verified selection, the sampled fallback, the next-contact check, step-back, repeat and dead-end ranking, the shot check, the lone forward reaching the shooting area, an angled shot beating a piece on the centre line, progress measurement inside and outside the shooting area, the balanced ranking (longer safe advance first, possession safety before progress, the 100 mm limit) the exposure check with a static opposing piece, and bank passes (used when the direct lane is blocked, not used when it is open, always tried with the trigger off). |
 | `test_sim_turns.py` | Controller outcomes, hand-over, direction, the three-touch limit, decision statistics and the recorded ball stops. |
-| `test_sim_scenarios.py` | Seed reproducibility, home and away symmetry over a short horizon, and report content. |
+| `test_sim_scenarios.py` | Seed reproducibility, home and away symmetry over a short horizon, blocker placement (unchanged pieces and ball, clear of the ball, mirrored for the away team) and report content. |
 
 ## How a flick flows through the modules
 
@@ -248,7 +300,9 @@ Run all tests with `python -m unittest discover -p "test_*.py"`.
    does not touch the world.
 4. Each candidate is simulated on a `PhysicsWorld.clone()`. Candidates that
    miss the ball, foul, hit an opposing piece, lose possession or leave no
-   next contact are rejected. A flick that leaves a lone piece on its final
+   next contact are rejected. If no direct flick reaches the advance level,
+   bank passes from `bank_pass_candidates()` are simulated and ranked with
+   them. A flick that leaves a lone piece on its final
    touch inside the shooting area is kept only if a look one flick ahead finds
    a goal. If none survive, or the best is only a step back, a repeat or a dead
    end, `sample_flick_candidates()` supplies exploratory flicks, which are
