@@ -39,7 +39,11 @@ with 2 blockers about 110 / 63 / 515 / 842 ms (3 pieces) and 148 / 103 /
 618 / 1094 ms (4 pieces). Timings vary by several percent between runs, the
 max much more. Planned / sampled decisions: 487 / 54 (3 pieces), 500 / 41
 (4 pieces), 502 / 62 and 519 / 47 with blockers. The 4-piece run is the
-5-a-side reference. Report the two standard runs after every sub-step, and
+5-a-side reference. On `DESKTOP-PM18PGL` (2026-11-28, runs made one
+after the other, same seeded results): 3 pieces about 52 s, decision time
+86 / 50 / 342 / 1046 ms; 4 pieces about 77 s, 128 / 84 / 501 / 1186 ms;
+tests 7.5 s. Roughly 40% slower than `DESKTOP-QIQAIK7`; blocker runs not
+yet timed there. Report the two standard runs after every sub-step, and
 the blocker runs when a change affects blocked routes. `--blockers N` adds N
 static opposing pieces ahead of the ball (testing only; a full match does
 not use them). Run harness commands with `run_in_background`.
@@ -114,7 +118,7 @@ If the user gives a different instruction, follow it.
   | Machine | Python | pygame | Checked | Notes |
   |---|---|---|---|---|
   | `DESKTOP-QIQAIK7` | 3.13.5 | 2.6.1 | 2026-11-28 | All baselines and timings so far |
-  | Second machine | not yet recorded | | | |
+  | `DESKTOP-PM18PGL` | 3.13.7 | 2.6.1 (SDL 2.28.4) | 2026-11-28 | First used 2026-11-28; 148 tests pass (7.5 s). Python is the python.org install in `%LOCALAPPDATA%\Programs\Python\Python313`; `pip` is not on PATH (use `python -m pip`). Branch switched from `master` to `main` tracking `origin/main` on 2026-11-28 |
 
   pymunk is not installed and nothing imports it. pygame prints a harmless
   `pkg_resources` deprecation warning on import.
@@ -853,6 +857,12 @@ the current task. Never change a response the user has written.
   user's other machine, the first pull after that commit may need
   `git checkout -- __pycache__` first. The user works on two machines and
   always pulls from GitHub manually before a session.
+- (2026-11-28, `DESKTOP-PM18PGL`, fixed the same day) This machine had a
+  local `master` branch with no upstream (two old test commits merged
+  with `origin/main`, differing only by `TEST-PUSH.txt`). The user
+  switched to a local `main` tracking `origin/main` and deleted `master`;
+  checked: `main` at `b236e14`, level with `origin/main`. Both machines
+  now work on `main`.
 - Pre-existing lint warnings: unused `radius_x` in `sim_physics.py`
   (`_resolve_net_boundaries`) and an unused `PITCH_WIDTH_MM` import in
   `test_sim_ai_brain.py`.
