@@ -83,6 +83,12 @@ Every session, before any project-specific work:
   and [AI_QUERIES.md](AI_QUERIES.md) (see "Mandatory project context").
 - Treat an answer the user has recorded in [AI_QUERIES.md](AI_QUERIES.md) as
   decided, even if [AI_NOTES.md](AI_NOTES.md) has not caught up yet.
+- Check which machine is in use (`$env:COMPUTERNAME`) and its Python and
+  pygame versions. If the machine is not in the "Machines" table in
+  [AI_NOTES.md](AI_NOTES.md), add it; if its versions differ from the table,
+  say so.
+- Compare timings only with figures recorded for the same machine. Test
+  counts and seeded harness results should match on every machine.
 - In your first response, confirm which files you read and mention any
   questions the user has answered since [AI_NOTES.md](AI_NOTES.md) was last
   updated.

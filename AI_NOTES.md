@@ -26,7 +26,14 @@ when the user says "EXECUTE ORDER 66".
 | `python sim_scenarios.py --count 100 --seed 0 --team home --blockers 2` | 100% goal rate, 5.6 mean flicks per goal (about 65 s) |
 | `python sim_scenarios.py --count 100 --seed 0 --team home --pieces 4 --blockers 2` | 100% goal rate, 5.7 mean flicks per goal (about 85 s) |
 
-Decision time (mean / median / p95 / max), runs made two at a time: 3
+The goal rates, flicks per goal, outcome counts, test count and planned /
+sampled counts are seeded and should match on any machine. The run times
+above and the decision times below depend on the machine and were measured
+on `DESKTOP-QIQAIK7` (see "Machines" under "Working agreements"); on
+another machine, compare timings only with figures recorded for that
+machine.
+
+Decision time (mean / median / p95 / max) on `DESKTOP-QIQAIK7`, runs made two at a time: 3
 pieces about 63 / 40 / 288 / 489 ms; 4 pieces about 91 / 65 / 329 / 652 ms;
 with 2 blockers about 110 / 63 / 515 / 842 ms (3 pieces) and 148 / 103 /
 618 / 1094 ms (4 pieces). Timings vary by several percent between runs, the
@@ -99,8 +106,18 @@ If the user gives a different instruction, follow it.
   since step 3.3, longer with blockers. Run harness commands with
   `run_in_background` and wait for the notification; do not start them as a
   detached shell job (`&`), which gives no notification.
-- Environment (checked 2026-11-24): Python 3.13.5, pygame 2.6.1. pymunk is not
-  installed and nothing imports it.
+- Machines: the user works on two machines, synced through GitHub
+  (`origin main`); the user always pulls manually before a session. Find the
+  current machine with `$env:COMPUTERNAME`. Record each machine here when it
+  is first used:
+
+  | Machine | Python | pygame | Checked | Notes |
+  |---|---|---|---|---|
+  | `DESKTOP-QIQAIK7` | 3.13.5 | 2.6.1 | 2026-11-28 | All baselines and timings so far |
+  | Second machine | not yet recorded | | | |
+
+  pymunk is not installed and nothing imports it. pygame prints a harmless
+  `pkg_resources` deprecation warning on import.
 - Tooling note for Claude Code on this machine: multi-line Python passed to the
   Bash tool through a heredoc fails when it contains triple quotes; write the
   script to the scratchpad and run the file instead.
@@ -830,8 +847,12 @@ the current task. Never change a response the user has written.
   briefly during planning; removing the pause is recorded under step 5. The
   user has noted to check the fix in the real window themselves, and can then
   clear `USER_NOTES.md`.
-- `__pycache__/*.pyc` files are tracked in git and show as modified. Suggest a
-  `.gitignore` entry to the user.
+- (2026-11-28) `__pycache__/*.pyc` files are no longer tracked: a
+  `.gitignore` (`__pycache__/`, `*.pyc`) was added and the 18 files were
+  untracked with `git rm -r --cached` (staged; the user commits). On the
+  user's other machine, the first pull after that commit may need
+  `git checkout -- __pycache__` first. The user works on two machines and
+  always pulls from GitHub manually before a session.
 - Pre-existing lint warnings: unused `radius_x` in `sim_physics.py`
   (`_resolve_net_boundaries`) and an unused `PITCH_WIDTH_MM` import in
   `test_sim_ai_brain.py`.
